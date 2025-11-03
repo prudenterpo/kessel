@@ -1,0 +1,38 @@
+# ===== CLion & JetBrains =====
+.idea/
+cmake-build-*/
+*.iml
+
+# ===== Build artifacts =====
+/build/
+/bin/
+/out/
+/dist/
+/Debug/
+/Release/
+/CMakeFiles/
+CMakeCache.txt
+Makefile
+cmake_install.cmake
+compile_commands.json
+
+# ===== System files =====
+.DS_Store
+Thumbs.db
+
+# ===== Logs & Temp =====
+*.log
+*.tmp
+
+# ===== Test outputs =====
+*.gcda
+*.gcno
+*.gcov
+
+# ===== Docker =====
+*.pid
+*.sock
+
+# ===== Ignore executables =====
+/kessel
+/kessel-cli
