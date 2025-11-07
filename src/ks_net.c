@@ -48,7 +48,7 @@ int ks_listen(const char* host, uint16_t port) {
         return -1;
     }
 
-    const int yes = 1;
+    int yes = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
     struct sockaddr_in addr = {0};
@@ -56,7 +56,7 @@ int ks_listen(const char* host, uint16_t port) {
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = inet_addr(host);
 
-    if (bind(fd, (const struct sockadd*)&addr, sizeof(addr)) != 0) {
+    if (bind(fd, (const struct sockaddr*)&addr, sizeof(addr)) != 0) {
         ks_log_err("bind failed");
         ks_close(fd);
         return -1;
@@ -77,7 +77,7 @@ int ks_accept(int listen_fd) {
     return cfd;
 }
 
-int ks_read_line(int fd, char* out, size_t cap) {
+int ks_readline(int fd, char* out, size_t cap) {
     size_t n = 0;
     while (n + 1 < cap) {
         char c;
