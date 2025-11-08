@@ -8,7 +8,7 @@ void ks_log_set_level(int level) {
     KS_LVL = level;
 }
 
-static void vlog(const int lvl, const char* tag, const char* fmt, const va_list ap) {
+static void vlog(const int lvl, const char* tag, const char* fmt, va_list ap) {
     if (lvl > KS_LVL) return;
     time_t t = time(NULL);
     struct tm tmv;

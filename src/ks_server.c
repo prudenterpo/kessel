@@ -29,9 +29,10 @@ static void handle_command(int cfd, char* line) {
         return;
     }
 
-    for (char* p = cmd.cmd; *p; ++p) *p = (char)toupper((unsigned char) *p);
+    for (char* p = cmd.cmd; *p; ++p)
+        *p = (char)toupper((unsigned char)*p);
 
-    of (strcmp(cmd.cmd, "PING") == 0) {
+    if (strcmp(cmd.cmd, "PING") == 0) {
         ks_fmt_simple(resp, sizeof(resp), "PONG");
         ks_writeall(cfd, resp, strlen(resp));
         return;
@@ -47,7 +48,8 @@ static void handle_command(int cfd, char* line) {
         ks_writeall(cfd, resp, strlen(resp));
         return;
     }
-    if (strcmp(cmd.cmd, "HELP") == 0 ) {
+
+    if (strcmp(cmd.cmd, "HELP") == 0) {
         const char* help =
             "Kessel commands (Phase 1):\n"
             " PING\n"
@@ -73,33 +75,39 @@ int ks_server_run(const ks_config_t* cfg) {
     for (;;) {
         fd_set rfds;
         FD_ZERO(&rfds);
+        FD_SET(lfd, &rfds);
         int maxfd = lfd;
 
         for (int i = 0; i < KS_MAX_CLIENTS; i++) {
             if (clients[i].used) {
                 FD_SET(clients[i].fd, &rfds);
-                if (clients[i].fd > maxfd) maxfd = clients[i].fd;
+                if (clients[i].fd > maxfd)
+                    maxfd = clients[i].fd;
             }
         }
 
         int rv = select(maxfd + 1, &rfds, NULL, NULL, NULL);
         if (rv < 0) {
-           ks_log_err("select failed");
+            ks_log_err("select failed");
             break;
         }
 
+        // New connection
         if (FD_ISSET(lfd, &rfds)) {
             int cfd = ks_accept(lfd);
             if (cfd >= 0) {
                 int slot = -1;
-                for (int i = 0; i < KS_MAX_CLIENTS; i++) if (!clients[i].used) { slot = i; break;}
+                for (int i = 0; i < KS_MAX_CLIENTS; i++) {
+                    if (!clients[i].used) { slot = i; break; }
+                }
+
                 if (slot >= 0) {
                     clients[slot].used = 1;
                     clients[slot].fd = cfd;
                     ks_log_info("Client connected (fd=%d)", cfd);
                 } else {
                     ks_log_warn("Too many clients");
-#if defined(_WIN_32)
+#if defined(_WIN32)
                     closesocket(cfd);
 #else
                     close(cfd);
@@ -108,7 +116,7 @@ int ks_server_run(const ks_config_t* cfg) {
             }
         }
 
-        //Existing clients
+        // Existing clients
         for (int i = 0; i < KS_MAX_CLIENTS; i++) {
             if (!clients[i].used) continue;
             int cfd = clients[i].fd;
@@ -126,30 +134,11 @@ int ks_server_run(const ks_config_t* cfg) {
                 clients[i].used = 0;
                 continue;
             }
+
             handle_command(cfd, line);
         }
     }
+
     return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

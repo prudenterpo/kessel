@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #ifdef _WIN32
-    #include <string.h>
     #define strcasecmp _stricmp
 #else
     #include <strings.h>
