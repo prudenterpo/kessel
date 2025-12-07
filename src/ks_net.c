@@ -89,9 +89,13 @@ int ks_readline(int fd, char* out, size_t cap) {
         if (r == 0) return -1;
         if (r < 0) return -1;
         out[n++] = c;
-        if (n >= 2 && out[n-2] == '\r' && out[n-1] == '\n') {
-            out[n-2] = 0;
-            return (int)(n-2);
+        if (c == '\n') {
+            if (n >= 2 && out[n-2] == '\r') {
+                out[n-2] = 0;
+                return (int)(n-2);
+            }
+            out[n-1] = 0;
+            return (int)(n-1);
         }
     }
     return -1;
