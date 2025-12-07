@@ -98,11 +98,11 @@ int ks_readline(int fd, char* out, size_t cap) {
 }
 
 int ks_writeall(int fd, const void* buf, size_t len) {
-    const char* p = (const char*)buf;
+    const char* p = buf;
     size_t off = 0;
     while (off < len) {
 #if defined(_WIN32)
-        int w = send(fd, p + off, (int)(len -off), 0);
+        int w = send(fd, p + off, (len -off), 0);
 #else
         ssize_t w = send(fd, p + off, len - off, 0);
 #endif
