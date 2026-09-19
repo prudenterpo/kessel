@@ -1,9 +1,10 @@
 #include "ks_config.h"
-#include <string.h>
+
+#include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
-#include <errno.h>
+#include <string.h>
 
 #ifdef _WIN32
     #define strcasecmp _stricmp
@@ -15,6 +16,7 @@ void ks_config_init(ks_config_t* cfg) {
     cfg->host = "0.0.0.0";
     cfg->port = 7070;
     cfg->log_level = 2;
+    cfg->max_clients = 256;
 }
 
 static int parse_log_level(const char* s, int* level) {
@@ -37,10 +39,58 @@ static int parse_port(const char* s, uint16_t* port) {
     return 0;
 }
 
+static int parse_max_clients(const char* s, size_t* max_clients) {
+    char* end = NULL;
+    errno = 0;
+    unsigned long value = strtoul(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0' || value < 1 || value > 1023) {
+        return -1;
+    }
+    *max_clients = (size_t)value;
+    return 0;
+}
+
+static int apply_host(ks_config_t* cfg, const char* value, const char* source) {
+    if (value == NULL || value[0] == '\0') {
+        fprintf(stderr, "Invalid host from %s\n", source);
+        return -1;
+    }
+    cfg->host = value;
+    return 0;
+}
+
+int ks_config_from_env(ks_config_t* cfg) {
+    const char* value = getenv("KESSEL_HOST");
+    if (value != NULL && apply_host(cfg, value, "KESSEL_HOST") != 0) {
+        return -1;
+    }
+
+    value = getenv("KESSEL_PORT");
+    if (value != NULL && parse_port(value, &cfg->port) != 0) {
+        fprintf(stderr, "Invalid port from KESSEL_PORT: %s\n", value);
+        return -1;
+    }
+
+    value = getenv("KESSEL_LOG_LEVEL");
+    if (value != NULL && parse_log_level(value, &cfg->log_level) != 0) {
+        fprintf(stderr, "Invalid log level from KESSEL_LOG_LEVEL: %s\n", value);
+        return -1;
+    }
+
+    value = getenv("KESSEL_MAX_CLIENTS");
+    if (value != NULL && parse_max_clients(value, &cfg->max_clients) != 0) {
+        fprintf(stderr, "Invalid max clients from KESSEL_MAX_CLIENTS: %s\n", value);
+        return -1;
+    }
+    return 0;
+}
+
 int ks_config_from_argv(ks_config_t* cfg, int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
-            cfg->host = argv[++i];
+            if (apply_host(cfg, argv[++i], "--host") != 0) {
+                return -1;
+            }
 
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             if (parse_port(argv[++i], &cfg->port) != 0) {
@@ -51,6 +101,12 @@ int ks_config_from_argv(ks_config_t* cfg, int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--log") == 0 && i + 1 < argc) {
             if (parse_log_level(argv[++i], &cfg->log_level) != 0) {
                 fprintf(stderr, "Invalid log level: %s\n", argv[i]);
+                return -1;
+            }
+
+        } else if (strcmp(argv[i], "--max-clients") == 0 && i + 1 < argc) {
+            if (parse_max_clients(argv[++i], &cfg->max_clients) != 0) {
+                fprintf(stderr, "Invalid max clients: %s\n", argv[i]);
                 return -1;
             }
 
