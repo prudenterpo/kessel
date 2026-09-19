@@ -117,7 +117,9 @@ def run_malformed(server):
         sockets.append(incomplete)
         incomplete.sendall(b"PING")
         incomplete.shutdown(socket.SHUT_WR)
-        assert receive_exact(incomplete, 24) == b"-ERR incomplete command\r\n"
+        expected = b"-ERR incomplete command\r\n"
+        actual = receive_exact(incomplete, len(expected))
+        assert actual == expected, actual
         expect_closed(incomplete)
     finally:
         stop_server(process, sockets)
@@ -194,8 +196,8 @@ def run_concurrency(server):
             assert actual == message, actual
             received += 1
 
-        expect(primary, b"GET w0-0\r\n", b"$3\r\nv0-0\r\n")
-        expect(primary, b"GET w7-39\r\n", b"$4\r\nv7-39\r\n")
+        expect(primary, b"GET w0-0\r\n", b"$4\r\nv0-0\r\n")
+        expect(primary, b"GET w7-39\r\n", b"$5\r\nv7-39\r\n")
     finally:
         stop_server(process, sockets)
 

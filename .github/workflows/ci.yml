@@ -33,6 +33,8 @@ jobs:
 
   sanitizers:
     runs-on: ubuntu-latest
+    env:
+      CC: gcc
     steps:
       - uses: actions/checkout@v7
       - name: Configure
