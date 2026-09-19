@@ -160,6 +160,29 @@ static void test_resize_preserves_entries(void) {
     ks_ds_destroy(&table);
 }
 
+static void test_tombstone_rebuild_without_growth(void) {
+    ks_ds_t table;
+    CHECK(ks_ds_init(&table, constant_hash, string_equal, free, free));
+
+    const char* keys[] = {"a", "b", "c", "d", "e"};
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+        CHECK(ks_ds_put(&table, copy_string(keys[i]), copy_string(keys[i])) ==
+              KS_DS_PUT_INSERTED);
+    }
+    size_t capacity = ks_ds_capacity(&table);
+    CHECK(ks_ds_remove(&table, "a"));
+    CHECK(ks_ds_remove(&table, "b"));
+    CHECK(ks_ds_remove(&table, "c"));
+    CHECK(ks_ds_remove(&table, "d"));
+
+    CHECK(ks_ds_put(&table, copy_string("new"), copy_string("value")) ==
+          KS_DS_PUT_INSERTED);
+    CHECK(ks_ds_capacity(&table) == capacity);
+    CHECK(strcmp(ks_ds_get(&table, "e"), "e") == 0);
+    CHECK(strcmp(ks_ds_get(&table, "new"), "value") == 0);
+    ks_ds_destroy(&table);
+}
+
 static void test_invalid_inputs(void) {
     ks_kv_t store;
     CHECK(!ks_kv_init(NULL));
@@ -179,6 +202,7 @@ int main(void) {
     test_empty_and_binary_values();
     test_collisions_tombstones_and_ownership();
     test_resize_preserves_entries();
+    test_tombstone_rebuild_without_growth();
     test_invalid_inputs();
 
     if (failures != 0) {

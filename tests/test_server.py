@@ -69,10 +69,29 @@ def run(server):
 
         expect(primary, b"PING\r\n", b"+PONG\r\n")
         expect(primary, b'ECHO "hello world"\r\n', b"$11\r\nhello world\r\n")
-        help_text = b"Kessel commands:\n PING\n ECHO <string>\n HELP\n"
+        help_text = (
+            b"Kessel commands:\n"
+            b" PING\n"
+            b" ECHO <string>\n"
+            b" SET <key> <value>\n"
+            b" GET <key>\n"
+            b" DEL <key>\n"
+            b" EXISTS <key>\n"
+            b" HELP\n"
+        )
         expect(primary, b"HELP\r\n", b"$%d\r\n%s\r\n" % (len(help_text), help_text))
         expect(primary, b"NOPE\r\n", b"-ERR unknown command\r\n")
         expect(primary, b"PING\0JUNK\r\n", b"-ERR invalid command\r\n")
+
+        expect(primary, b'SET greeting "hello world"\r\n', b"+OK\r\n")
+        expect(primary, b"GET greeting\r\n", b"$11\r\nhello world\r\n")
+        expect(primary, b"EXISTS greeting\r\n", b":1\r\n")
+        expect(primary, b"SET greeting updated\r\n", b"+OK\r\n")
+        expect(primary, b"GET greeting\r\n", b"$7\r\nupdated\r\n")
+        expect(primary, b"DEL greeting\r\n", b":1\r\n")
+        expect(primary, b"DEL greeting\r\n", b":0\r\n")
+        expect(primary, b"EXISTS greeting\r\n", b":0\r\n")
+        expect(primary, b"GET greeting\r\n", b"$-1\r\n")
 
         primary.sendall(b"PING\r\nECHO pipelined\r\n")
         expected = b"+PONG\r\n$9\r\npipelined\r\n"
@@ -81,6 +100,8 @@ def run(server):
         partial = connect(port)
         concurrent = connect(port)
         sockets.extend([partial, concurrent])
+        expect(primary, b"SET shared visible\r\n", b"+OK\r\n")
+        expect(concurrent, b"GET shared\r\n", b"$7\r\nvisible\r\n")
         partial.sendall(b"PI")
         expect(concurrent, b"PING\r\n", b"+PONG\r\n")
         expect(partial, b"NG\r\n", b"+PONG\r\n")

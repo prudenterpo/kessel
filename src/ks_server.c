@@ -1,5 +1,6 @@
 #include "ks_server.h"
 #include "ks_log.h"
+#include "ks_kv.h"
 #include "ks_net.h"
 #include "ks_protocol.h"
 
@@ -83,7 +84,7 @@ static int queue_error(ks_client_t* client, const char* message) {
     return length == 0 ? -1 : client_queue(client, response, length);
 }
 
-static int handle_command(ks_client_t* client, char* line) {
+static int handle_command(ks_client_t* client, ks_kv_t* store, char* line) {
     ks_cmd_t command;
     char response[KS_MAX_REQUEST + 64u];
     size_t response_len = 0;
@@ -107,8 +108,46 @@ static int handle_command(ks_client_t* client, char* line) {
         if (command.argc != 0) {
             return queue_error(client, "wrong number of arguments to 'HELP'");
         }
-        const char* help = "Kessel commands:\n PING\n ECHO <string>\n HELP\n";
+        const char* help =
+            "Kessel commands:\n"
+            " PING\n"
+            " ECHO <string>\n"
+            " SET <key> <value>\n"
+            " GET <key>\n"
+            " DEL <key>\n"
+            " EXISTS <key>\n"
+            " HELP\n";
         response_len = ks_fmt_bulk(response, sizeof(response), help, strlen(help));
+    } else if (strcmp(command.cmd, "SET") == 0) {
+        if (command.argc != 2) {
+            return queue_error(client, "wrong number of arguments to 'SET'");
+        }
+        if (ks_kv_set(store, command.argv[0], command.argv[1],
+                      strlen(command.argv[1])) == KS_KV_SET_ERROR) {
+            return queue_error(client, "unable to store value");
+        }
+        response_len = ks_fmt_simple(response, sizeof(response), "OK");
+    } else if (strcmp(command.cmd, "GET") == 0) {
+        if (command.argc != 1) {
+            return queue_error(client, "wrong number of arguments to 'GET'");
+        }
+        size_t value_size = 0;
+        const char* value = ks_kv_get(store, command.argv[0], &value_size);
+        response_len = value == NULL
+                           ? ks_fmt_nil(response, sizeof(response))
+                           : ks_fmt_bulk(response, sizeof(response), value, value_size);
+    } else if (strcmp(command.cmd, "DEL") == 0) {
+        if (command.argc != 1) {
+            return queue_error(client, "wrong number of arguments to 'DEL'");
+        }
+        response_len = ks_fmt_int(response, sizeof(response),
+                                  ks_kv_delete(store, command.argv[0]) ? 1 : 0);
+    } else if (strcmp(command.cmd, "EXISTS") == 0) {
+        if (command.argc != 1) {
+            return queue_error(client, "wrong number of arguments to 'EXISTS'");
+        }
+        response_len = ks_fmt_int(response, sizeof(response),
+                                  ks_kv_exists(store, command.argv[0]) ? 1 : 0);
     } else {
         return queue_error(client, "unknown command");
     }
@@ -116,7 +155,7 @@ static int handle_command(ks_client_t* client, char* line) {
     return response_len == 0 ? -1 : client_queue(client, response, response_len);
 }
 
-static int process_requests(ks_client_t* client) {
+static int process_requests(ks_client_t* client, ks_kv_t* store) {
     size_t consumed = 0;
     while (consumed < client->input_len) {
         if (client->output_len - client->output_offset >= KS_OUTPUT_HIGH_WATER) {
@@ -153,7 +192,7 @@ static int process_requests(ks_client_t* client) {
         int has_following_data = end < client->input_len;
         char saved = has_following_data ? client->input[end] : '\0';
         client->input[end] = '\0';
-        int result = handle_command(client, client->input + consumed);
+        int result = handle_command(client, store, client->input + consumed);
         if (has_following_data) {
             client->input[end] = saved;
         }
@@ -171,7 +210,7 @@ static int process_requests(ks_client_t* client) {
     return 0;
 }
 
-static int read_client(ks_client_t* client) {
+static int read_client(ks_client_t* client, ks_kv_t* store) {
     for (;;) {
         if (client->output_len - client->output_offset >= KS_OUTPUT_HIGH_WATER) {
             return 0;
@@ -205,7 +244,7 @@ static int read_client(ks_client_t* client) {
         }
 
         client->input_len += received;
-        if (process_requests(client) != 0) {
+        if (process_requests(client, store) != 0) {
             return -1;
         }
         if (client->close_after_write) {
@@ -275,6 +314,13 @@ int ks_server_run(const ks_config_t* cfg) {
         return 1;
     }
 
+    ks_kv_t store;
+    if (!ks_kv_init(&store)) {
+        ks_log_err("failed to initialize key-value store");
+        (void)ks_close(listen_fd);
+        return 1;
+    }
+
     ks_stop_requested = 0;
     void (*previous_sigint)(int) = signal(SIGINT, handle_stop_signal);
     void (*previous_sigterm)(int) = signal(SIGTERM, handle_stop_signal);
@@ -337,7 +383,7 @@ int ks_server_run(const ks_config_t* cfg) {
             }
 
             int should_close = 0;
-            if (FD_ISSET(client->fd, &read_fds) && read_client(client) != 0) {
+            if (FD_ISSET(client->fd, &read_fds) && read_client(client, &store) != 0) {
                 should_close = 1;
             }
             if (!should_close && FD_ISSET(client->fd, &write_fds) && write_client(client) != 0) {
@@ -345,7 +391,7 @@ int ks_server_run(const ks_config_t* cfg) {
             }
             if (!should_close && client->input_len > 0 &&
                 client->output_len - client->output_offset < KS_OUTPUT_HIGH_WATER &&
-                process_requests(client) != 0) {
+                process_requests(client, &store) != 0) {
                 should_close = 1;
             }
             if (!should_close && client->close_after_write &&
@@ -363,6 +409,7 @@ int ks_server_run(const ks_config_t* cfg) {
         client_reset(&clients[i]);
     }
     (void)ks_close(listen_fd);
+    ks_kv_destroy(&store);
     if (previous_sigint != SIG_ERR) {
         (void)signal(SIGINT, previous_sigint);
     }
