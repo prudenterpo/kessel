@@ -4,16 +4,16 @@
 
 - Base branch: `develop`
 - Active vertical: V1 — Stable server baseline
-- Status: ready to start
-- Active PR: none
+- Status: in review
+- Active PR: https://github.com/prudenterpo/kessel/pull/1
 - Blockers: none
-- Next: create the V1 feature branch, implement the stable server baseline, verify it, and open `fix: stabilize client io` against `develop`.
+- Next: review and merge V1, then start V2 and V4 in parallel with the V5 transport/REPL foundation.
 
 ## Vertical status
 
 | Vertical | Status | Depends on | PR |
 |---|---|---|---|
-| V1 — Stable server baseline | Ready | — | — |
+| V1 — Stable server baseline | In review | — | https://github.com/prudenterpo/kessel/pull/1 |
 | V2 — Key-value store | Blocked | V1 | — |
 | V3 — Key expiration | Blocked | V2 | — |
 | V4 — Pub/Sub | Blocked | V1 | — |
