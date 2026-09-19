@@ -3,11 +3,11 @@
 ## Current handoff
 
 - Base branch: `master`
-- Active verticals: v1 release
-- Status: in review
-- Active PRs: https://github.com/prudenterpo/kessel/pull/8
+- Active verticals: none
+- Status: done
+- Active PRs: none
 - Blockers: none
-- Next: keep the release PR open for review, then merge `develop` to `master`.
+- Next: v1 shipped on `master` via https://github.com/prudenterpo/kessel/pull/8. Open a new plan before the next vertical.
 
 ## Vertical status
 
