@@ -4,35 +4,51 @@
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <limits.h>
 #pragma comment(lib, "ws2_32.lib")
 #else
-  #include <sys/types.h>
-  #include <sys/socket.h>
-  #include <netinet/in.h>
-  #include <fcntl.h>
-  #include <arpa/inet.h>
-  #include <unistd.h>
-  #include <errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <fcntl.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
 #endif
 
-#include <string.h>
-#include <stdio.h>
-
-static int ks_close(int fd) {
+int ks_close(int fd) {
 #if defined(_WIN32)
-    return closesocket(fd);
+    return closesocket((SOCKET)fd) == 0 ? 0 : -1;
 #else
     return close(fd);
+#endif
+}
+
+static int ks_error_would_block(void) {
+#if defined(_WIN32)
+    return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK;
+#endif
+}
+
+static int ks_error_interrupted(void) {
+#if defined(_WIN32)
+    return WSAGetLastError() == WSAEINTR;
+#else
+    return errno == EINTR;
 #endif
 }
 
 int ks_set_nonblock(int fd) {
 #if defined(_WIN32)
     u_long m = 1;
-    return ioctlsocket(fd, FIONBIO, &m) == 0 ? 0 : -1;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &m) == 0 ? 0 : -1;
 #else
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0) return -1;
+    if (flags < 0) {
+        return -1;
+    }
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 #endif
 }
@@ -40,29 +56,60 @@ int ks_set_nonblock(int fd) {
 int ks_listen(const char* host, uint16_t port) {
 #if defined(_WIN32)
     WSADATA w;
-    WSAStartup(MAKEWORD(2,2), &w);
+    if (WSAStartup(MAKEWORD(2, 2), &w) != 0) {
+        ks_log_err("winsock startup failed");
+        return -1;
+    }
 #endif
-    int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
+
+#if defined(_WIN32)
+    SOCKET socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket_fd == INVALID_SOCKET) {
+#else
+    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_fd < 0) {
+#endif
         ks_log_err("socket failed");
         return -1;
     }
+    int fd = (int)socket_fd;
 
     int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+#if defined(_WIN32)
+    int option_len = (int)sizeof(yes);
+#else
+    socklen_t option_len = (socklen_t)sizeof(yes);
+#endif
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes,
+                   option_len) != 0) {
+        ks_log_err("setsockopt failed");
+        ks_close(fd);
+        return -1;
+    }
 
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = inet_addr(host);
+    if (host == NULL || host[0] == '\0') {
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        ks_log_err("invalid listen address");
+        ks_close(fd);
+        return -1;
+    }
 
-    if (bind(fd, (const struct sockaddr*)&addr, sizeof(addr)) != 0) {
+    if (bind(socket_fd, (const struct sockaddr*)&addr, sizeof(addr)) != 0) {
         ks_log_err("bind failed");
         ks_close(fd);
         return -1;
     }
-    if (listen(fd, 128) != 0) {
+    if (listen(socket_fd, 128) != 0) {
         ks_log_err("listen failed");
+        ks_close(fd);
+        return -1;
+    }
+    if (ks_set_nonblock(fd) != 0) {
+        ks_log_err("failed to make listener non-blocking");
         ks_close(fd);
         return -1;
     }
@@ -71,47 +118,111 @@ int ks_listen(const char* host, uint16_t port) {
 
 int ks_accept(int listen_fd) {
     struct sockaddr_in caddr;
+#if defined(_WIN32)
+    int clen = (int)sizeof(caddr);
+    SOCKET accepted_fd;
+#else
     socklen_t clen = sizeof(caddr);
-    int cfd = (int)accept(listen_fd, (struct sockaddr*)&caddr, &clen);
-    if (cfd < 0) return -1;
+    int accepted_fd;
+#endif
+
+    do {
+#if defined(_WIN32)
+        accepted_fd = accept((SOCKET)listen_fd, (struct sockaddr*)&caddr, &clen);
+#else
+        accepted_fd = accept(listen_fd, (struct sockaddr*)&caddr, &clen);
+#endif
+    } while (
+#if defined(_WIN32)
+        accepted_fd == INVALID_SOCKET && ks_error_interrupted()
+#else
+        accepted_fd < 0 && ks_error_interrupted()
+#endif
+    );
+
+#if defined(_WIN32)
+    if (accepted_fd == INVALID_SOCKET) {
+#else
+    if (accepted_fd < 0) {
+#endif
+        return ks_error_would_block() ? KS_NET_ACCEPT_WOULD_BLOCK
+                                      : KS_NET_ACCEPT_ERROR;
+    }
+
+    int cfd = (int)accepted_fd;
+    if (ks_set_nonblock(cfd) != 0) {
+        ks_close(cfd);
+        return KS_NET_ACCEPT_ERROR;
+    }
+#if !defined(_WIN32) && defined(SO_NOSIGPIPE)
+    int yes = 1;
+    (void)setsockopt(cfd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+#endif
     return cfd;
 }
 
-int ks_readline(int fd, char* out, size_t cap) {
-    size_t n = 0;
-    while (n + 1 < cap) {
-        char c;
-#if defined(_WIN32)
-        int r = recv(fd, &c, 1, 0);
-#else
-        int r = (int)recv(fd, &c, 1, 0);
-#endif
-        if (r == 0) return -1;
-        if (r < 0) return -1;
-        out[n++] = c;
-        if (c == '\n') {
-            if (n >= 2 && out[n-2] == '\r') {
-                out[n-2] = 0;
-                return (int)(n-2);
-            }
-            out[n-1] = 0;
-            return (int)(n-1);
-        }
+ks_io_status ks_recv(int fd, void* buf, size_t len, size_t* received) {
+    if (received != NULL) {
+        *received = 0;
     }
-    return -1;
+    if (len == 0) {
+        return KS_IO_OK;
+    }
+
+    for (;;) {
+#if defined(_WIN32)
+        int chunk = len > (size_t)INT_MAX ? INT_MAX : (int)len;
+        int result = recv((SOCKET)fd, buf, chunk, 0);
+#else
+        ssize_t result = recv(fd, buf, len, 0);
+#endif
+        if (result > 0) {
+            if (received != NULL) {
+                *received = (size_t)result;
+            }
+            return KS_IO_OK;
+        }
+        if (result == 0) {
+            return KS_IO_CLOSED;
+        }
+        if (ks_error_interrupted()) {
+            continue;
+        }
+        return ks_error_would_block() ? KS_IO_WOULD_BLOCK : KS_IO_ERROR;
+    }
 }
 
-int ks_writeall(int fd, const void* buf, size_t len) {
-    const char* p = buf;
-    size_t off = 0;
-    while (off < len) {
-#if defined(_WIN32)
-        int w = send(fd, p + off, (len -off), 0);
-#else
-        ssize_t w = send(fd, p + off, len - off, 0);
-#endif
-        if (w <= 0) return -1;
-        off += (size_t)w;
+ks_io_status ks_send(int fd, const void* buf, size_t len, size_t* sent) {
+    if (sent != NULL) {
+        *sent = 0;
     }
-    return 0;
+    if (len == 0) {
+        return KS_IO_OK;
+    }
+
+    for (;;) {
+#if defined(_WIN32)
+        int chunk = len > (size_t)INT_MAX ? INT_MAX : (int)len;
+        int result = send((SOCKET)fd, (const char*)buf, chunk, 0);
+#else
+        int flags = 0;
+#if defined(MSG_NOSIGNAL)
+        flags = MSG_NOSIGNAL;
+#endif
+        ssize_t result = send(fd, buf, len, flags);
+#endif
+        if (result > 0) {
+            if (sent != NULL) {
+                *sent = (size_t)result;
+            }
+            return KS_IO_OK;
+        }
+        if (result == 0) {
+            return KS_IO_CLOSED;
+        }
+        if (ks_error_interrupted()) {
+            continue;
+        }
+        return ks_error_would_block() ? KS_IO_WOULD_BLOCK : KS_IO_ERROR;
+    }
 }

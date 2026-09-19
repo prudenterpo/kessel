@@ -1,26 +1,60 @@
 cmake_minimum_required(VERSION 3.22)
-project(kessel C)
+project(kessel LANGUAGES C)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-# Debug flags (CLion can switch configs)
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_compile_options(-O0 -g -Wall -Wextra -Wpedantic -Werror)
+option(KESSEL_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+add_library(kessel_options INTERFACE)
+target_compile_features(kessel_options INTERFACE c_std_17)
+
+if(MSVC)
+    target_compile_options(kessel_options INTERFACE /W4 /WX)
 else()
-    add_compile_options(-O2 -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(kessel_options INTERFACE -Wall -Wextra -Wpedantic -Werror)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        target_compile_options(kessel_options INTERFACE -O2)
+    endif()
 endif()
 
-include_directories(include)
+if(KESSEL_ENABLE_SANITIZERS)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU" AND NOT WIN32)
+        target_compile_options(kessel_options INTERFACE -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+        target_link_options(kessel_options INTERFACE -fsanitize=address,undefined)
+    else()
+        message(FATAL_ERROR "KESSEL_ENABLE_SANITIZERS requires GCC or Clang on a POSIX platform")
+    endif()
+endif()
 
-set(SRC
-        src/main_server.c
-        src/ks_config.c
-        src/ks_log.c
-        src/ks_protocol.c
-        src/ks_net.c
-        src/ks_server.c
+add_library(kessel_core
+    src/ks_config.c
+    src/ks_log.c
+    src/ks_net.c
+    src/ks_protocol.c
+    src/ks_server.c
 )
+target_include_directories(kessel_core PUBLIC include)
+target_link_libraries(kessel_core PUBLIC kessel_options)
 
-add_executable(kessel ${SRC})
+add_executable(kessel src/main_server.c)
+target_link_libraries(kessel PRIVATE kessel_core)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_protocol tests/test_protocol.c)
+    target_link_libraries(test_protocol PRIVATE kessel_core)
+    add_test(NAME protocol COMMAND test_protocol)
+
+    add_executable(test_config tests/test_config.c)
+    target_link_libraries(test_config PRIVATE kessel_core)
+    add_test(NAME config COMMAND test_config)
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME server_integration
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_server.py $<TARGET_FILE:kessel>
+    )
+    set_tests_properties(server_integration PROPERTIES TIMEOUT 15)
+endif()
