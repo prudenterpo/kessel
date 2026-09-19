@@ -5,6 +5,7 @@
 - Base branch: `master`
 - Active verticals: v1 release
 - Status: in review
+- Active PRs: https://github.com/prudenterpo/kessel/pull/8
 - Blockers: none
 - Next: keep the release PR open for review, then merge `develop` to `master`.
 
