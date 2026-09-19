@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import signal
 import socket
 import subprocess
@@ -27,6 +28,22 @@ def receive_exact(sock, size):
             raise AssertionError(f"connection closed after {len(data)} of {size} bytes")
         data.extend(chunk)
     return bytes(data)
+
+
+def receive_line(sock):
+    data = bytearray()
+    while not data.endswith(b"\r\n"):
+        data.extend(receive_exact(sock, 1))
+    return bytes(data)
+
+
+def receive_bulk(sock):
+    header = receive_line(sock)
+    assert header.startswith(b"$") and header.endswith(b"\r\n"), header
+    size = int(header[1:-2])
+    payload = receive_exact(sock, size)
+    assert receive_exact(sock, 2) == b"\r\n"
+    return payload
 
 
 def expect(sock, request, response):
@@ -218,7 +235,45 @@ def run(server):
     assert process.returncode == 0, process.returncode
 
 
+def run_max_clients(server):
+    port = reserve_port()
+    env = os.environ.copy()
+    env.update(
+        KESSEL_HOST="127.0.0.1",
+        KESSEL_PORT=str(port),
+        KESSEL_LOG_LEVEL="WARN",
+        KESSEL_MAX_CLIENTS="1",
+    )
+    process = subprocess.Popen(
+        [server], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env
+    )
+    primary = None
+    rejected = None
+    try:
+        primary = wait_until_ready(process, port)
+        rejected = connect(port)
+        expect_closed(rejected)
+
+        primary.sendall(b"INFO\r\n")
+        info = receive_bulk(primary)
+        assert b"connected_clients:1\n" in info, info
+        assert b"max_clients:1\n" in info, info
+        assert b"rejected_connections:1\n" in info, info
+    finally:
+        if rejected is not None:
+            rejected.close()
+        if primary is not None:
+            primary.close()
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+        _, stderr = process.communicate(timeout=3)
+
+    assert process.returncode == 0, process.returncode
+    assert b"[WARN] connection rejected (max-clients=1)" in stderr, stderr
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit("usage: test_server.py /path/to/kessel")
     run(sys.argv[1])
+    run_max_clients(sys.argv[1])
