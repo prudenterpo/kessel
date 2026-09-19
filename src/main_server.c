@@ -7,7 +7,7 @@ int main(int argc, char* argv[]) {
     ks_config_t cfg;
     ks_config_init(&cfg);
 
-    if (ks_config_from_env(&cfg) != 0 || ks_config_from_argv(&cfg, argc, argv) != 0) {
+    if (ks_config_load(&cfg, argc, argv) != 0) {
         fprintf(stderr, "Usage: kessel [--host 0.0.0.0] [--port 7070] "
                         "[--log DEBUG|INFO|WARN|ERROR] [--max-clients 256]\n");
         return 1;
