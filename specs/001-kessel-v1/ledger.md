@@ -3,11 +3,11 @@
 ## Current handoff
 
 - Base branch: `develop`
-- Active verticals: V3 — Key expiration; V4 — Pub/Sub; V5 — CLI; V6 — Operations
-- Status: in progress
-- Active PRs: https://github.com/prudenterpo/kessel/pull/3
+- Active verticals: none
+- Status: feature verticals complete
+- Active PRs: none
 - Blockers: none
-- Next: merge V4, then rebase and publish the completed dependent verticals.
+- Next: start V7 release hardening in a new thread.
 
 ## Vertical status
 
@@ -15,11 +15,11 @@
 |---|---|---|---|
 | V1 — Stable server baseline | Done | — | https://github.com/prudenterpo/kessel/pull/1 |
 | V2 — Key-value store | Done | V1 | https://github.com/prudenterpo/kessel/pull/2 |
-| V3 — Key expiration | Ready | V2 | — |
-| V4 — Pub/Sub | In review | V1 | https://github.com/prudenterpo/kessel/pull/3 |
-| V5 — CLI | In progress | V1; finishes after V4 | — |
-| V6 — Operations and distribution | In progress | V1; integrates after V2/V4 | — |
-| V7 — Release hardening | Blocked | V2–V6 | — |
+| V3 — Key expiration | Done | V2 | https://github.com/prudenterpo/kessel/pull/4 |
+| V4 — Pub/Sub | Done | V1 | https://github.com/prudenterpo/kessel/pull/3 |
+| V5 — CLI | Done | V1; finishes after V4 | https://github.com/prudenterpo/kessel/pull/5 |
+| V6 — Operations and distribution | Done | V1; integrates after V2/V4 | https://github.com/prudenterpo/kessel/pull/6 |
+| V7 — Release hardening | Ready | V2–V6 | — |
 
 ## Handoff rule
 
