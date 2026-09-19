@@ -6,6 +6,7 @@ RUN apt-get update \
 
 WORKDIR /src
 COPY CMakeLists.txt ./
+COPY cli ./cli
 COPY include ./include
 COPY src ./src
 
