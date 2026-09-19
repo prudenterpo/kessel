@@ -1,3 +1,7 @@
+#if !defined(_WIN32)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "ks_config.h"
 
 #ifdef NDEBUG
@@ -37,22 +41,24 @@ static void test_environment_and_argument_precedence(void) {
 
     ks_config_t cfg;
     ks_config_init(&cfg);
-    assert(ks_config_from_env(&cfg) == 0);
-    assert(strcmp(cfg.host, "127.0.0.2") == 0);
-    assert(cfg.port == 17071);
-    assert(cfg.log_level == 1);
-    assert(cfg.max_clients == 23);
-
     char* argv[] = {"kessel", "--port", "17072", "--max-clients", "24"};
-    assert(ks_config_from_argv(&cfg, 5, argv) == 0);
+    assert(ks_config_load(&cfg, 5, argv) == 0);
     assert(strcmp(cfg.host, "127.0.0.2") == 0);
     assert(cfg.port == 17072);
+    assert(cfg.log_level == 1);
     assert(cfg.max_clients == 24);
 
     assert(unsetenv("KESSEL_HOST") == 0);
     assert(unsetenv("KESSEL_PORT") == 0);
     assert(unsetenv("KESSEL_LOG_LEVEL") == 0);
     assert(unsetenv("KESSEL_MAX_CLIENTS") == 0);
+
+    assert(setenv("KESSEL_PORT", "bad", 1) == 0);
+    ks_config_init(&cfg);
+    char* override_bad_env[] = {"kessel", "--port", "17073"};
+    assert(ks_config_load(&cfg, 3, override_bad_env) == 0);
+    assert(cfg.port == 17073);
+    assert(unsetenv("KESSEL_PORT") == 0);
 }
 
 static void test_invalid_arguments(void) {

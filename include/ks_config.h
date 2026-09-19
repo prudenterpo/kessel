@@ -14,5 +14,6 @@ typedef struct {
 void ks_config_init(ks_config_t* cfg);
 int  ks_config_from_env(ks_config_t* cfg);
 int  ks_config_from_argv(ks_config_t* cfg, int argc, char* argv[]);
+int  ks_config_load(ks_config_t* cfg, int argc, char* argv[]);
 
 #endif
