@@ -30,6 +30,8 @@ endif()
 
 add_library(kessel_core
     src/ks_config.c
+    src/ks_ds.c
+    src/ks_kv.c
     src/ks_log.c
     src/ks_net.c
     src/ks_protocol.c
@@ -53,6 +55,10 @@ if(BUILD_TESTING)
     add_executable(test_config tests/test_config.c)
     target_link_libraries(test_config PRIVATE kessel_core)
     add_test(NAME config COMMAND test_config)
+
+    add_executable(test_kv tests/test_kv.c)
+    target_link_libraries(test_kv PRIVATE kessel_core)
+    add_test(NAME kv COMMAND test_kv)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(
