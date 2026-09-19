@@ -77,6 +77,9 @@ def run(server):
             b" GET <key>\n"
             b" DEL <key>\n"
             b" EXISTS <key>\n"
+            b" SETEX <key> <seconds> <value>\n"
+            b" EXPIRE <key> <seconds>\n"
+            b" TTL <key>\n"
             b" PUBLISH <channel> <message>\n"
             b" SUBSCRIBE <channel>\n"
             b" UNSUBSCRIBE <channel>\n"
@@ -95,6 +98,22 @@ def run(server):
         expect(primary, b"DEL greeting\r\n", b":0\r\n")
         expect(primary, b"EXISTS greeting\r\n", b":0\r\n")
         expect(primary, b"GET greeting\r\n", b"$-1\r\n")
+
+        expect(primary, b"SETEX temporary 30 value\r\n", b"+OK\r\n")
+        expect(primary, b"GET temporary\r\n", b"$5\r\nvalue\r\n")
+        primary.sendall(b"TTL temporary\r\n")
+        ttl_response = bytearray()
+        while not ttl_response.endswith(b"\r\n"):
+            ttl_response.extend(primary.recv(32))
+        assert int(ttl_response[1:-2]) in (29, 30), ttl_response
+        expect(primary, b"EXPIRE temporary 60\r\n", b":1\r\n")
+        expect(primary, b"EXPIRE missing 60\r\n", b":0\r\n")
+        expect(primary, b"EXPIRE temporary 0\r\n", b":1\r\n")
+        expect(primary, b"TTL temporary\r\n", b":-2\r\n")
+        expect(primary, b"SET persistent value\r\n", b"+OK\r\n")
+        expect(primary, b"TTL persistent\r\n", b":-1\r\n")
+        expect(primary, b"SETEX bad 0 value\r\n", b"-ERR invalid expire time\r\n")
+        expect(primary, b"EXPIRE persistent nope\r\n", b"-ERR invalid expire time\r\n")
 
         primary.sendall(b"PING\r\nECHO pipelined\r\n")
         expected = b"+PONG\r\n$9\r\npipelined\r\n"
