@@ -32,7 +32,7 @@ static size_t bounded_length(const char* text, size_t limit) {
 
 static bool parse_token(char** cursor, char** token) {
     char* read = *cursor;
-    char* write = read;
+    char* write;
 
     if (*read == '"') {
         ++read;

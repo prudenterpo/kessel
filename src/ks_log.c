@@ -20,7 +20,10 @@ static void vlog(const int lvl, const char* tag, const char* fmt, va_list ap) {
     char buf[32];
     strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tmv);
     fprintf(stderr, "[%s][%s] ", buf, tag);
-    vfprintf(stderr, fmt, ap);
+    va_list copy;
+    va_copy(copy, ap);
+    vfprintf(stderr, fmt, copy);
+    va_end(copy);
     fprintf(stderr, "\n");
 }
 

@@ -45,8 +45,14 @@ static void test_tabs_and_argument_limit(void) {
     CHECK(command.argc == 2);
 
     char too_many[256] = "cmd";
+    size_t used = 3;
     for (int i = 0; i < KS_MAX_ARGS + 1; ++i) {
-        strcat(too_many, " x");
+        if (used + 2 >= sizeof(too_many)) {
+            break;
+        }
+        too_many[used++] = ' ';
+        too_many[used++] = 'x';
+        too_many[used] = '\0';
     }
     CHECK(!ks_parse_line(too_many, &command));
     CHECK(command.cmd == NULL);
