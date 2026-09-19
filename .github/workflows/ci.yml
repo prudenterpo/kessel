@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+    branches: [develop, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure
+        run: >-
+          cmake -S . -B build-sanitizers
+          -DCMAKE_BUILD_TYPE=Debug
+          -DKESSEL_ENABLE_SANITIZERS=ON
+      - name: Build
+        run: cmake --build build-sanitizers --parallel
+      - name: Test
+        run: ctest --test-dir build-sanitizers --output-on-failure
