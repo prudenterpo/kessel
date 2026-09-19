@@ -13,6 +13,7 @@ COPY src ./src
 RUN cmake -S . -B /build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_TESTING=OFF \
+        -DKESSEL_BUILD_BENCHMARKS=OFF \
     && cmake --build /build --target kessel --parallel
 
 FROM debian:bookworm-slim AS runtime
