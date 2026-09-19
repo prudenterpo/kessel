@@ -1,0 +1,12 @@
+services:
+  kessel:
+    build: .
+    image: kessel:local
+    environment:
+      KESSEL_HOST: 0.0.0.0
+      KESSEL_PORT: ${KESSEL_PORT:-7070}
+      KESSEL_LOG_LEVEL: ${KESSEL_LOG_LEVEL:-INFO}
+      KESSEL_MAX_CLIENTS: ${KESSEL_MAX_CLIENTS:-256}
+    ports:
+      - "${KESSEL_PORT:-7070}:${KESSEL_PORT:-7070}"
+    restart: unless-stopped
