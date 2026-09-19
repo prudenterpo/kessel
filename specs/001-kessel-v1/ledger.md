@@ -5,7 +5,7 @@
 - Base branch: `develop`
 - Active verticals: V2 — Key-value store; V4 — Pub/Sub; V5 — CLI foundation
 - Status: in progress
-- Active PRs: none
+- Active PRs: https://github.com/prudenterpo/kessel/pull/2
 - Blockers: none
 - Next: finish the isolated modules in parallel, integrate each vertical end to end, and open separate PRs against `develop`.
 
@@ -14,7 +14,7 @@
 | Vertical | Status | Depends on | PR |
 |---|---|---|---|
 | V1 — Stable server baseline | Done | — | https://github.com/prudenterpo/kessel/pull/1 |
-| V2 — Key-value store | In progress | V1 | — |
+| V2 — Key-value store | In review | V1 | https://github.com/prudenterpo/kessel/pull/2 |
 | V3 — Key expiration | Blocked | V2 | — |
 | V4 — Pub/Sub | In progress | V1 | — |
 | V5 — CLI | In progress | V1; finishes after V4 | — |
