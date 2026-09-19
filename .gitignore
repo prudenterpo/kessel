@@ -5,6 +5,7 @@ cmake-build-*/
 
 # ===== Build artifacts =====
 /build/
+/build-*/
 /bin/
 /out/
 /dist/
