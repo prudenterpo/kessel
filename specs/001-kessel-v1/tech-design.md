@@ -87,6 +87,12 @@ CMake builds a reusable `kessel_core` library plus `kessel`, `kessel-cli`, unit 
 
 The clock used by TTL is injectable in unit tests. Network fault cases use small wrapper seams rather than mocking the full event loop. CI runs the normal build/tests and a separate ASan/UBSan build on Linux.
 
+## Operations
+
+Configuration precedence is command-line arguments, then `KESSEL_*` environment variables, then built-in defaults. The server validates the port, log level, and client limit before entering the event loop. The configured client limit is also capped below `FD_SETSIZE`.
+
+`INFO` reports uptime, current and maximum clients, accepted and rejected connections, processed commands, live key count, and Pub/Sub channel and subscription counts.
+
 ## Integration ownership
 
 The active base lead owns `CMakeLists.txt`, `ks_server.c`, public shared headers, and dispatcher wiring. Vertical leads add isolated modules and their tests, and coordinate shared-interface changes through that lead. The accepted contracts are recorded here before dependent verticals merge.

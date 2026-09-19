@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -20,7 +21,6 @@
 #include <sys/select.h>
 #endif
 
-#define KS_MAX_CLIENTS 1024
 #define KS_INPUT_CAP (KS_MAX_REQUEST + 2u)
 #define KS_OUTPUT_CAP (2u * (KS_MAX_REQUEST + 64u))
 #define KS_OUTPUT_HIGH_WATER (KS_OUTPUT_CAP / 2u)
@@ -39,6 +39,19 @@ typedef struct {
     size_t output_offset;
     size_t output_len;
 } ks_client_t;
+
+typedef struct {
+    ks_client_t* clients;
+    size_t count;
+} ks_delivery_context_t;
+
+typedef struct {
+    size_t connected_clients;
+    unsigned long long total_connections;
+    unsigned long long rejected_connections;
+    unsigned long long total_commands;
+    time_t started_at;
+} ks_server_metrics_t;
 
 static volatile sig_atomic_t ks_stop_requested = 0;
 
@@ -123,9 +136,9 @@ static size_t format_pubsub_message(char* response, size_t capacity,
 static bool deliver_pubsub_message(ks_pubsub_client_id client_id,
                                    const char* channel, const char* message,
                                    size_t message_length, void* context) {
-    ks_client_t* clients = context;
-    for (int i = 0; i < KS_MAX_CLIENTS; i++) {
-        ks_client_t* client = &clients[i];
+    ks_delivery_context_t* delivery = context;
+    for (size_t i = 0; i < delivery->count; i++) {
+        ks_client_t* client = &delivery->clients[i];
         if (!client->used || client->id != client_id) {
             continue;
         }
@@ -159,13 +172,53 @@ static int parse_seconds(const char* text, int64_t* seconds) {
     return 0;
 }
 
+static size_t format_info(char* response, size_t capacity,
+                          const ks_config_t* cfg,
+                          const ks_server_metrics_t* metrics,
+                          ks_kv_t* store, const ks_pubsub_t* pubsub) {
+    time_t now = time(NULL);
+    long long uptime = 0;
+    if (now != (time_t)-1 && metrics->started_at != (time_t)-1 &&
+        now >= metrics->started_at) {
+        uptime = (long long)(now - metrics->started_at);
+    }
+
+    char info[768];
+    int written = snprintf(
+        info, sizeof(info),
+        "# Server\n"
+        "uptime_in_seconds:%lld\n"
+        "# Clients\n"
+        "connected_clients:%zu\n"
+        "max_clients:%zu\n"
+        "total_connections_received:%llu\n"
+        "rejected_connections:%llu\n"
+        "# Stats\n"
+        "total_commands_processed:%llu\n"
+        "# Keyspace\n"
+        "keys:%zu\n"
+        "# PubSub\n"
+        "channels:%zu\n"
+        "subscriptions:%zu\n",
+        uptime, metrics->connected_clients, cfg->max_clients,
+        metrics->total_connections, metrics->rejected_connections,
+        metrics->total_commands, ks_kv_size(store),
+        ks_pubsub_channel_count(pubsub), ks_pubsub_subscription_count(pubsub));
+    if (written < 0 || (size_t)written >= sizeof(info)) {
+        return 0;
+    }
+    return ks_fmt_bulk(response, capacity, info, (size_t)written);
+}
+
 static int handle_command(ks_client_t* client, ks_kv_t* store,
                           ks_pubsub_t* pubsub, ks_client_t clients[],
-                          char* line) {
+                          size_t max_clients, const ks_config_t* cfg,
+                          ks_server_metrics_t* metrics, char* line) {
     ks_cmd_t command;
     char response[KS_MAX_REQUEST + 64u];
     size_t response_len = 0;
 
+    metrics->total_commands++;
     if (!ks_parse_line(line, &command) || command.cmd == NULL) {
         return queue_error(client, "invalid command");
     }
@@ -199,6 +252,7 @@ static int handle_command(ks_client_t* client, ks_kv_t* store,
             " PUBLISH <channel> <message>\n"
             " SUBSCRIBE <channel>\n"
             " UNSUBSCRIBE <channel>\n"
+            " INFO\n"
             " HELP\n";
         response_len = ks_fmt_bulk(response, sizeof(response), help, strlen(help));
     } else if (strcmp(command.cmd, "SET") == 0) {
@@ -297,9 +351,16 @@ static int handle_command(ks_client_t* client, ks_kv_t* store,
         }
         size_t recipients = ks_pubsub_publish(
             pubsub, command.argv[0], command.argv[1], strlen(command.argv[1]),
-            deliver_pubsub_message, clients);
+            deliver_pubsub_message,
+            &(ks_delivery_context_t){.clients = clients, .count = max_clients});
         response_len = ks_fmt_int(response, sizeof(response),
                                   (long long)recipients);
+    } else if (strcmp(command.cmd, "INFO") == 0) {
+        if (command.argc != 0) {
+            return queue_error(client, "wrong number of arguments to 'INFO'");
+        }
+        response_len = format_info(response, sizeof(response), cfg, metrics,
+                                   store, pubsub);
     } else {
         return queue_error(client, "unknown command");
     }
@@ -308,7 +369,9 @@ static int handle_command(ks_client_t* client, ks_kv_t* store,
 }
 
 static int process_requests(ks_client_t* client, ks_kv_t* store,
-                            ks_pubsub_t* pubsub, ks_client_t clients[]) {
+                            ks_pubsub_t* pubsub, ks_client_t clients[],
+                            size_t max_clients, const ks_config_t* cfg,
+                            ks_server_metrics_t* metrics) {
     size_t consumed = 0;
     while (consumed < client->input_len) {
         if (client->output_len - client->output_offset >= KS_OUTPUT_HIGH_WATER) {
@@ -345,8 +408,8 @@ static int process_requests(ks_client_t* client, ks_kv_t* store,
         int has_following_data = end < client->input_len;
         char saved = has_following_data ? client->input[end] : '\0';
         client->input[end] = '\0';
-        int result = handle_command(client, store, pubsub, clients,
-                                    client->input + consumed);
+        int result = handle_command(client, store, pubsub, clients, max_clients,
+                                    cfg, metrics, client->input + consumed);
         if (has_following_data) {
             client->input[end] = saved;
         }
@@ -365,7 +428,9 @@ static int process_requests(ks_client_t* client, ks_kv_t* store,
 }
 
 static int read_client(ks_client_t* client, ks_kv_t* store,
-                       ks_pubsub_t* pubsub, ks_client_t clients[]) {
+                       ks_pubsub_t* pubsub, ks_client_t clients[],
+                       size_t max_clients, const ks_config_t* cfg,
+                       ks_server_metrics_t* metrics) {
     for (;;) {
         if (client->output_len - client->output_offset >= KS_OUTPUT_HIGH_WATER) {
             return 0;
@@ -399,7 +464,8 @@ static int read_client(ks_client_t* client, ks_kv_t* store,
         }
 
         client->input_len += received;
-        if (process_requests(client, store, pubsub, clients) != 0) {
+        if (process_requests(client, store, pubsub, clients, max_clients, cfg,
+                             metrics) != 0) {
             return -1;
         }
         if (client->close_after_write) {
@@ -427,7 +493,9 @@ static int write_client(ks_client_t* client) {
 }
 
 static int accept_clients(int listen_fd, ks_client_t clients[],
-                          ks_pubsub_client_id* next_client_id) {
+                          size_t max_clients,
+                          ks_pubsub_client_id* next_client_id,
+                          ks_server_metrics_t* metrics) {
     for (int accepted = 0; accepted < KS_ACCEPT_BUDGET && !ks_stop_requested; accepted++) {
         int client_fd = ks_accept(listen_fd);
         if (client_fd == KS_NET_ACCEPT_WOULD_BLOCK) {
@@ -438,15 +506,16 @@ static int accept_clients(int listen_fd, ks_client_t clients[],
             return -1;
         }
 
-        int slot = -1;
-        for (int i = 0; i < KS_MAX_CLIENTS; i++) {
+        size_t slot = max_clients;
+        for (size_t i = 0; i < max_clients; i++) {
             if (!clients[i].used) {
                 slot = i;
                 break;
             }
         }
-        if (slot < 0 || client_fd >= FD_SETSIZE) {
-            ks_log_warn("too many clients");
+        if (slot == max_clients || client_fd >= FD_SETSIZE) {
+            metrics->rejected_connections++;
+            ks_log_warn("connection rejected (max-clients=%zu)", max_clients);
             (void)ks_close(client_fd);
             continue;
         }
@@ -455,15 +524,23 @@ static int accept_clients(int listen_fd, ks_client_t clients[],
             *next_client_id = 1;
         }
         if (client_init(&clients[slot], client_fd, client_id) != 0) {
+            metrics->rejected_connections++;
             ks_log_warn("failed to allocate client buffers");
             continue;
         }
-        ks_log_info("client connected (fd=%d)", client_fd);
+        metrics->connected_clients++;
+        metrics->total_connections++;
+        ks_log_info("client connected (fd=%d, clients=%zu)", client_fd,
+                    metrics->connected_clients);
     }
     return 0;
 }
 
 int ks_server_run(const ks_config_t* cfg) {
+    if (cfg == NULL || cfg->max_clients == 0 || cfg->max_clients >= FD_SETSIZE) {
+        ks_log_err("max-clients must be between 1 and %d", FD_SETSIZE - 1);
+        return 1;
+    }
     int listen_fd = ks_listen(cfg->host, cfg->port);
     if (listen_fd < 0) {
         return 1;
@@ -489,13 +566,22 @@ int ks_server_run(const ks_config_t* cfg) {
         return 1;
     }
 
+    ks_client_t* clients = calloc(cfg->max_clients, sizeof(*clients));
+    if (clients == NULL) {
+        ks_log_err("failed to allocate client registry");
+        ks_pubsub_destroy(pubsub);
+        ks_kv_destroy(&store);
+        (void)ks_close(listen_fd);
+        return 1;
+    }
+
     ks_stop_requested = 0;
     void (*previous_sigint)(int) = signal(SIGINT, handle_stop_signal);
     void (*previous_sigterm)(int) = signal(SIGTERM, handle_stop_signal);
     ks_log_info("listening on %s:%u", cfg->host, cfg->port);
 
-    ks_client_t clients[KS_MAX_CLIENTS] = {0};
     ks_pubsub_client_id next_client_id = 1;
+    ks_server_metrics_t metrics = {.started_at = time(NULL)};
     int result = 0;
     int accept_backoff_ticks = 0;
     while (!ks_stop_requested) {
@@ -511,7 +597,7 @@ int ks_server_run(const ks_config_t* cfg) {
         }
         int max_fd = listen_fd;
 
-        for (int i = 0; i < KS_MAX_CLIENTS; i++) {
+        for (size_t i = 0; i < cfg->max_clients; i++) {
             ks_client_t* client = &clients[i];
             if (!client->used) {
                 continue;
@@ -545,11 +631,12 @@ int ks_server_run(const ks_config_t* cfg) {
         }
 
         if (accept_backoff_ticks == 0 && FD_ISSET(listen_fd, &read_fds) &&
-            accept_clients(listen_fd, clients, &next_client_id) != 0) {
+            accept_clients(listen_fd, clients, cfg->max_clients,
+                           &next_client_id, &metrics) != 0) {
             accept_backoff_ticks = 10;
         }
 
-        for (int i = 0; i < KS_MAX_CLIENTS; i++) {
+        for (size_t i = 0; i < cfg->max_clients; i++) {
             ks_client_t* client = &clients[i];
             if (!client->used) {
                 continue;
@@ -557,7 +644,8 @@ int ks_server_run(const ks_config_t* cfg) {
 
             int should_close = client->drop_connection;
             if (FD_ISSET(client->fd, &read_fds) &&
-                read_client(client, &store, pubsub, clients) != 0) {
+                read_client(client, &store, pubsub, clients, cfg->max_clients,
+                            cfg, &metrics) != 0) {
                 should_close = 1;
             }
             if (!should_close && FD_ISSET(client->fd, &write_fds) && write_client(client) != 0) {
@@ -565,7 +653,8 @@ int ks_server_run(const ks_config_t* cfg) {
             }
             if (!should_close && client->input_len > 0 &&
                 client->output_len - client->output_offset < KS_OUTPUT_HIGH_WATER &&
-                process_requests(client, &store, pubsub, clients) != 0) {
+                process_requests(client, &store, pubsub, clients,
+                                 cfg->max_clients, cfg, &metrics) != 0) {
                 should_close = 1;
             }
             if (!should_close && client->close_after_write &&
@@ -573,19 +662,24 @@ int ks_server_run(const ks_config_t* cfg) {
                 should_close = 1;
             }
             if (should_close) {
-                ks_log_info("client disconnected (fd=%d)", client->fd);
+                if (metrics.connected_clients > 0) {
+                    metrics.connected_clients--;
+                }
+                ks_log_info("client disconnected (fd=%d, clients=%zu)",
+                            client->fd, metrics.connected_clients);
                 (void)ks_pubsub_remove_client(pubsub, client->id);
                 client_reset(client);
             }
         }
     }
 
-    for (int i = 0; i < KS_MAX_CLIENTS; i++) {
+    for (size_t i = 0; i < cfg->max_clients; i++) {
         if (clients[i].used) {
             (void)ks_pubsub_remove_client(pubsub, clients[i].id);
         }
         client_reset(&clients[i]);
     }
+    free(clients);
     (void)ks_close(listen_fd);
     ks_kv_destroy(&store);
     ks_pubsub_destroy(pubsub);

@@ -83,9 +83,19 @@ def run(server):
             b" PUBLISH <channel> <message>\n"
             b" SUBSCRIBE <channel>\n"
             b" UNSUBSCRIBE <channel>\n"
+            b" INFO\n"
             b" HELP\n"
         )
         expect(primary, b"HELP\r\n", b"$%d\r\n%s\r\n" % (len(help_text), help_text))
+        primary.sendall(b"INFO\r\n")
+        info = receive_bulk(primary)
+        assert b"connected_clients:1\n" in info, info
+        assert b"max_clients:256\n" in info, info
+        assert b"total_connections_received:1\n" in info, info
+        assert b"total_commands_processed:4\n" in info, info
+        assert b"keys:0\n" in info, info
+        assert b"channels:0\n" in info, info
+        assert b"subscriptions:0\n" in info, info
         expect(primary, b"NOPE\r\n", b"-ERR unknown command\r\n")
         expect(primary, b"PING\0JUNK\r\n", b"-ERR invalid command\r\n")
 
