@@ -10,6 +10,10 @@ static int failures = 0;
 static int destroyed_keys = 0;
 static int destroyed_values = 0;
 
+typedef struct {
+    uint64_t now_ms;
+} fake_clock_t;
+
 #define CHECK(condition)                                                        \
     do {                                                                        \
         if (!(condition)) {                                                     \
@@ -46,6 +50,10 @@ static void destroy_key(void* key) {
 static void destroy_value(void* value) {
     ++destroyed_values;
     free(value);
+}
+
+static uint64_t fake_now(void* context) {
+    return ((fake_clock_t*)context)->now_ms;
 }
 
 static void test_kv_crud_and_copy_ownership(void) {
@@ -197,6 +205,69 @@ static void test_invalid_inputs(void) {
     ks_kv_destroy(NULL);
 }
 
+static void test_expiration_is_lazy_and_deterministic(void) {
+    fake_clock_t time = {.now_ms = UINT64_C(10000)};
+    ks_kv_t store;
+    CHECK(ks_kv_init_with_clock(
+        &store, (ks_ttl_clock_t){.now = fake_now, .context = &time}));
+
+    CHECK(ks_kv_set_ex(&store, "session", "value", 5U, 3U) ==
+          KS_KV_SET_INSERTED);
+    CHECK(ks_kv_ttl(&store, "session") == 3);
+    time.now_ms += UINT64_C(1500);
+    CHECK(ks_kv_ttl(&store, "session") == 1);
+    CHECK(ks_kv_exists(&store, "session"));
+
+    time.now_ms += UINT64_C(1500);
+    CHECK(ks_kv_get(&store, "session", NULL) == NULL);
+    CHECK(!ks_kv_exists(&store, "session"));
+    CHECK(ks_kv_ttl(&store, "session") == -2);
+    CHECK(ks_ds_size(&store.entries) == 0U);
+    ks_kv_destroy(&store);
+}
+
+static void test_set_and_expire_semantics(void) {
+    fake_clock_t time = {.now_ms = UINT64_C(5000)};
+    ks_kv_t store;
+    CHECK(ks_kv_init_with_clock(
+        &store, (ks_ttl_clock_t){.now = fake_now, .context = &time}));
+
+    CHECK(ks_kv_set(&store, "key", "one", 3U) == KS_KV_SET_INSERTED);
+    CHECK(ks_kv_ttl(&store, "key") == -1);
+    CHECK(ks_kv_expire(&store, "missing", 5U) == KS_KV_EXPIRE_MISSING);
+    CHECK(ks_kv_expire(&store, "key", 5U) == KS_KV_EXPIRE_UPDATED);
+    CHECK(ks_kv_ttl(&store, "key") == 5);
+
+    CHECK(ks_kv_set(&store, "key", "two", 3U) == KS_KV_SET_REPLACED);
+    CHECK(ks_kv_ttl(&store, "key") == -1);
+    CHECK(ks_kv_expire(&store, "key", 0U) == KS_KV_EXPIRE_UPDATED);
+    CHECK(ks_kv_ttl(&store, "key") == -2);
+
+    time.now_ms = UINT64_MAX - UINT64_C(500);
+    CHECK(ks_kv_set_ex(&store, "overflow", "x", 1U, 1U) ==
+          KS_KV_SET_ERROR);
+    ks_kv_destroy(&store);
+}
+
+static void test_budgeted_reaper(void) {
+    fake_clock_t time = {.now_ms = UINT64_C(1000)};
+    ks_kv_t store;
+    CHECK(ks_kv_init_with_clock(
+        &store, (ks_ttl_clock_t){.now = fake_now, .context = &time}));
+    CHECK(ks_kv_set_ex(&store, "a", "1", 1U, 1U) == KS_KV_SET_INSERTED);
+    CHECK(ks_kv_set_ex(&store, "b", "2", 1U, 1U) == KS_KV_SET_INSERTED);
+    CHECK(ks_kv_set(&store, "persistent", "3", 1U) == KS_KV_SET_INSERTED);
+
+    time.now_ms += UINT64_C(1000);
+    CHECK(ks_kv_reap(&store, 0U) == 0U);
+    CHECK(ks_kv_reap(&store, 1U) <= 1U);
+    CHECK(ks_kv_reap(&store, ks_ds_capacity(&store.entries)) <= 2U);
+    CHECK(ks_ds_size(&store.entries) == 1U);
+    CHECK(ks_kv_exists(&store, "persistent"));
+    CHECK(ks_kv_size(&store) == 1U);
+    ks_kv_destroy(&store);
+}
+
 int main(void) {
     test_kv_crud_and_copy_ownership();
     test_empty_and_binary_values();
@@ -204,6 +275,9 @@ int main(void) {
     test_resize_preserves_entries();
     test_tombstone_rebuild_without_growth();
     test_invalid_inputs();
+    test_expiration_is_lazy_and_deterministic();
+    test_set_and_expire_semantics();
+    test_budgeted_reaper();
 
     if (failures != 0) {
         fprintf(stderr, "%d key-value test(s) failed\n", failures);
