@@ -37,7 +37,12 @@ def wait_for_ping(port):
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1) as sock:
                 sock.sendall(b"PING\r\n")
-                response = sock.recv(64)
+                response = bytearray()
+                while len(response) < len(b"+PONG\r\n"):
+                    chunk = sock.recv(len(b"+PONG\r\n") - len(response))
+                    if not chunk:
+                        break
+                    response.extend(chunk)
                 if response == b"+PONG\r\n":
                     return
                 last_error = AssertionError(f"unexpected response: {response!r}")

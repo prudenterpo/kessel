@@ -8,5 +8,5 @@ services:
       KESSEL_LOG_LEVEL: ${KESSEL_LOG_LEVEL:-INFO}
       KESSEL_MAX_CLIENTS: ${KESSEL_MAX_CLIENTS:-256}
     ports:
-      - "${KESSEL_PORT:-7070}:${KESSEL_PORT:-7070}"
+      - "127.0.0.1:${KESSEL_PORT:-7070}:${KESSEL_PORT:-7070}"
     restart: unless-stopped

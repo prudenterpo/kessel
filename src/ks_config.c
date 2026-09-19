@@ -59,28 +59,42 @@ static int apply_host(ks_config_t* cfg, const char* value, const char* source) {
     return 0;
 }
 
-int ks_config_from_env(ks_config_t* cfg) {
+static int config_from_env(ks_config_t* cfg, int use_host, int use_port,
+                           int use_log_level, int use_max_clients) {
     const char* value = getenv("KESSEL_HOST");
-    if (value != NULL && apply_host(cfg, value, "KESSEL_HOST") != 0) {
+    if (use_host && value != NULL && apply_host(cfg, value, "KESSEL_HOST") != 0) {
         return -1;
     }
 
     value = getenv("KESSEL_PORT");
-    if (value != NULL && parse_port(value, &cfg->port) != 0) {
+    if (use_port && value != NULL && parse_port(value, &cfg->port) != 0) {
         fprintf(stderr, "Invalid port from KESSEL_PORT: %s\n", value);
         return -1;
     }
 
     value = getenv("KESSEL_LOG_LEVEL");
-    if (value != NULL && parse_log_level(value, &cfg->log_level) != 0) {
+    if (use_log_level && value != NULL && parse_log_level(value, &cfg->log_level) != 0) {
         fprintf(stderr, "Invalid log level from KESSEL_LOG_LEVEL: %s\n", value);
         return -1;
     }
 
     value = getenv("KESSEL_MAX_CLIENTS");
-    if (value != NULL && parse_max_clients(value, &cfg->max_clients) != 0) {
+    if (use_max_clients && value != NULL && parse_max_clients(value, &cfg->max_clients) != 0) {
         fprintf(stderr, "Invalid max clients from KESSEL_MAX_CLIENTS: %s\n", value);
         return -1;
+    }
+    return 0;
+}
+
+int ks_config_from_env(ks_config_t* cfg) {
+    return config_from_env(cfg, 1, 1, 1, 1);
+}
+
+static int has_argument(int argc, char* argv[], const char* name) {
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], name) == 0) {
+            return 1;
+        }
     }
     return 0;
 }
@@ -116,4 +130,17 @@ int ks_config_from_argv(ks_config_t* cfg, int argc, char* argv[]) {
         }
     }
     return 0;
+}
+
+int ks_config_load(ks_config_t* cfg, int argc, char* argv[]) {
+    int use_host = !has_argument(argc, argv, "--host");
+    int use_port = !has_argument(argc, argv, "--port");
+    int use_log_level = !has_argument(argc, argv, "--log");
+    int use_max_clients = !has_argument(argc, argv, "--max-clients");
+
+    if (config_from_env(cfg, use_host, use_port, use_log_level,
+                        use_max_clients) != 0) {
+        return -1;
+    }
+    return ks_config_from_argv(cfg, argc, argv);
 }
