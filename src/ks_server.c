@@ -3,6 +3,7 @@
 #include "ks_kv.h"
 #include "ks_net.h"
 #include "ks_protocol.h"
+#include "ks_pubsub.h"
 
 #include <signal.h>
 #include <stddef.h>
@@ -26,7 +27,9 @@
 typedef struct {
     int used;
     int fd;
+    ks_pubsub_client_id id;
     int close_after_write;
+    int drop_connection;
     char* input;
     size_t input_len;
     char* output;
@@ -50,7 +53,7 @@ static void client_reset(ks_client_t* client) {
     *client = (ks_client_t){0};
 }
 
-static int client_init(ks_client_t* client, int fd) {
+static int client_init(ks_client_t* client, int fd, ks_pubsub_client_id id) {
     char* input = malloc(KS_INPUT_CAP + 1u);
     char* output = malloc(KS_OUTPUT_CAP);
     if (input == NULL || output == NULL) {
@@ -59,7 +62,13 @@ static int client_init(ks_client_t* client, int fd) {
         (void)ks_close(fd);
         return -1;
     }
-    *client = (ks_client_t){.used = 1, .fd = fd, .input = input, .output = output};
+    *client = (ks_client_t){
+        .used = 1,
+        .fd = fd,
+        .id = id,
+        .input = input,
+        .output = output,
+    };
     return 0;
 }
 
@@ -84,7 +93,58 @@ static int queue_error(ks_client_t* client, const char* message) {
     return length == 0 ? -1 : client_queue(client, response, length);
 }
 
-static int handle_command(ks_client_t* client, ks_kv_t* store, char* line) {
+static size_t format_pubsub_message(char* response, size_t capacity,
+                                    const char* channel, const char* message,
+                                    size_t message_length) {
+    size_t offset = ks_fmt_array_header(response, capacity, 3);
+    if (offset == 0) {
+        return 0;
+    }
+    size_t written = ks_fmt_bulk(response + offset, capacity - offset,
+                                 "message", 7);
+    if (written == 0) {
+        return 0;
+    }
+    offset += written;
+    written = ks_fmt_bulk(response + offset, capacity - offset,
+                          channel, strlen(channel));
+    if (written == 0) {
+        return 0;
+    }
+    offset += written;
+    written = ks_fmt_bulk(response + offset, capacity - offset,
+                          message, message_length);
+    return written == 0 ? 0 : offset + written;
+}
+
+static bool deliver_pubsub_message(ks_pubsub_client_id client_id,
+                                   const char* channel, const char* message,
+                                   size_t message_length, void* context) {
+    ks_client_t* clients = context;
+    for (int i = 0; i < KS_MAX_CLIENTS; i++) {
+        ks_client_t* client = &clients[i];
+        if (!client->used || client->id != client_id) {
+            continue;
+        }
+        if (client->drop_connection) {
+            return false;
+        }
+        char response[KS_MAX_REQUEST + 128u];
+        size_t response_length = format_pubsub_message(
+            response, sizeof(response), channel, message, message_length);
+        if (response_length == 0 ||
+            client_queue(client, response, response_length) != 0) {
+            client->drop_connection = 1;
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+static int handle_command(ks_client_t* client, ks_kv_t* store,
+                          ks_pubsub_t* pubsub, ks_client_t clients[],
+                          char* line) {
     ks_cmd_t command;
     char response[KS_MAX_REQUEST + 64u];
     size_t response_len = 0;
@@ -116,6 +176,9 @@ static int handle_command(ks_client_t* client, ks_kv_t* store, char* line) {
             " GET <key>\n"
             " DEL <key>\n"
             " EXISTS <key>\n"
+            " PUBLISH <channel> <message>\n"
+            " SUBSCRIBE <channel>\n"
+            " UNSUBSCRIBE <channel>\n"
             " HELP\n";
         response_len = ks_fmt_bulk(response, sizeof(response), help, strlen(help));
     } else if (strcmp(command.cmd, "SET") == 0) {
@@ -148,6 +211,36 @@ static int handle_command(ks_client_t* client, ks_kv_t* store, char* line) {
         }
         response_len = ks_fmt_int(response, sizeof(response),
                                   ks_kv_exists(store, command.argv[0]) ? 1 : 0);
+    } else if (strcmp(command.cmd, "SUBSCRIBE") == 0) {
+        if (command.argc != 1) {
+            return queue_error(client, "wrong number of arguments to 'SUBSCRIBE'");
+        }
+        ks_pubsub_status status = ks_pubsub_subscribe(
+            pubsub, command.argv[0], client->id);
+        if (status == KS_PUBSUB_NO_MEMORY) {
+            return queue_error(client, "unable to subscribe");
+        }
+        if (status == KS_PUBSUB_INVALID_ARGUMENT) {
+            return queue_error(client, "invalid channel");
+        }
+        response_len = ks_fmt_simple(response, sizeof(response), "OK");
+    } else if (strcmp(command.cmd, "UNSUBSCRIBE") == 0) {
+        if (command.argc != 1) {
+            return queue_error(client, "wrong number of arguments to 'UNSUBSCRIBE'");
+        }
+        ks_pubsub_status status = ks_pubsub_unsubscribe(
+            pubsub, command.argv[0], client->id);
+        response_len = ks_fmt_int(
+            response, sizeof(response), status == KS_PUBSUB_OK ? 1 : 0);
+    } else if (strcmp(command.cmd, "PUBLISH") == 0) {
+        if (command.argc != 2) {
+            return queue_error(client, "wrong number of arguments to 'PUBLISH'");
+        }
+        size_t recipients = ks_pubsub_publish(
+            pubsub, command.argv[0], command.argv[1], strlen(command.argv[1]),
+            deliver_pubsub_message, clients);
+        response_len = ks_fmt_int(response, sizeof(response),
+                                  (long long)recipients);
     } else {
         return queue_error(client, "unknown command");
     }
@@ -155,7 +248,8 @@ static int handle_command(ks_client_t* client, ks_kv_t* store, char* line) {
     return response_len == 0 ? -1 : client_queue(client, response, response_len);
 }
 
-static int process_requests(ks_client_t* client, ks_kv_t* store) {
+static int process_requests(ks_client_t* client, ks_kv_t* store,
+                            ks_pubsub_t* pubsub, ks_client_t clients[]) {
     size_t consumed = 0;
     while (consumed < client->input_len) {
         if (client->output_len - client->output_offset >= KS_OUTPUT_HIGH_WATER) {
@@ -192,7 +286,8 @@ static int process_requests(ks_client_t* client, ks_kv_t* store) {
         int has_following_data = end < client->input_len;
         char saved = has_following_data ? client->input[end] : '\0';
         client->input[end] = '\0';
-        int result = handle_command(client, store, client->input + consumed);
+        int result = handle_command(client, store, pubsub, clients,
+                                    client->input + consumed);
         if (has_following_data) {
             client->input[end] = saved;
         }
@@ -210,7 +305,8 @@ static int process_requests(ks_client_t* client, ks_kv_t* store) {
     return 0;
 }
 
-static int read_client(ks_client_t* client, ks_kv_t* store) {
+static int read_client(ks_client_t* client, ks_kv_t* store,
+                       ks_pubsub_t* pubsub, ks_client_t clients[]) {
     for (;;) {
         if (client->output_len - client->output_offset >= KS_OUTPUT_HIGH_WATER) {
             return 0;
@@ -244,7 +340,7 @@ static int read_client(ks_client_t* client, ks_kv_t* store) {
         }
 
         client->input_len += received;
-        if (process_requests(client, store) != 0) {
+        if (process_requests(client, store, pubsub, clients) != 0) {
             return -1;
         }
         if (client->close_after_write) {
@@ -271,7 +367,8 @@ static int write_client(ks_client_t* client) {
     return client->close_after_write ? -1 : 0;
 }
 
-static int accept_clients(int listen_fd, ks_client_t clients[]) {
+static int accept_clients(int listen_fd, ks_client_t clients[],
+                          ks_pubsub_client_id* next_client_id) {
     for (int accepted = 0; accepted < KS_ACCEPT_BUDGET && !ks_stop_requested; accepted++) {
         int client_fd = ks_accept(listen_fd);
         if (client_fd == KS_NET_ACCEPT_WOULD_BLOCK) {
@@ -294,7 +391,11 @@ static int accept_clients(int listen_fd, ks_client_t clients[]) {
             (void)ks_close(client_fd);
             continue;
         }
-        if (client_init(&clients[slot], client_fd) != 0) {
+        ks_pubsub_client_id client_id = (*next_client_id)++;
+        if (*next_client_id == 0) {
+            *next_client_id = 1;
+        }
+        if (client_init(&clients[slot], client_fd, client_id) != 0) {
             ks_log_warn("failed to allocate client buffers");
             continue;
         }
@@ -321,12 +422,21 @@ int ks_server_run(const ks_config_t* cfg) {
         return 1;
     }
 
+    ks_pubsub_t* pubsub = ks_pubsub_create();
+    if (pubsub == NULL) {
+        ks_log_err("failed to initialize pubsub registry");
+        ks_kv_destroy(&store);
+        (void)ks_close(listen_fd);
+        return 1;
+    }
+
     ks_stop_requested = 0;
     void (*previous_sigint)(int) = signal(SIGINT, handle_stop_signal);
     void (*previous_sigterm)(int) = signal(SIGTERM, handle_stop_signal);
     ks_log_info("listening on %s:%u", cfg->host, cfg->port);
 
     ks_client_t clients[KS_MAX_CLIENTS] = {0};
+    ks_pubsub_client_id next_client_id = 1;
     int result = 0;
     int accept_backoff_ticks = 0;
     while (!ks_stop_requested) {
@@ -344,6 +454,9 @@ int ks_server_run(const ks_config_t* cfg) {
         for (int i = 0; i < KS_MAX_CLIENTS; i++) {
             ks_client_t* client = &clients[i];
             if (!client->used) {
+                continue;
+            }
+            if (client->drop_connection) {
                 continue;
             }
             if (!client->close_after_write &&
@@ -372,7 +485,7 @@ int ks_server_run(const ks_config_t* cfg) {
         }
 
         if (accept_backoff_ticks == 0 && FD_ISSET(listen_fd, &read_fds) &&
-            accept_clients(listen_fd, clients) != 0) {
+            accept_clients(listen_fd, clients, &next_client_id) != 0) {
             accept_backoff_ticks = 10;
         }
 
@@ -382,8 +495,9 @@ int ks_server_run(const ks_config_t* cfg) {
                 continue;
             }
 
-            int should_close = 0;
-            if (FD_ISSET(client->fd, &read_fds) && read_client(client, &store) != 0) {
+            int should_close = client->drop_connection;
+            if (FD_ISSET(client->fd, &read_fds) &&
+                read_client(client, &store, pubsub, clients) != 0) {
                 should_close = 1;
             }
             if (!should_close && FD_ISSET(client->fd, &write_fds) && write_client(client) != 0) {
@@ -391,7 +505,7 @@ int ks_server_run(const ks_config_t* cfg) {
             }
             if (!should_close && client->input_len > 0 &&
                 client->output_len - client->output_offset < KS_OUTPUT_HIGH_WATER &&
-                process_requests(client, &store) != 0) {
+                process_requests(client, &store, pubsub, clients) != 0) {
                 should_close = 1;
             }
             if (!should_close && client->close_after_write &&
@@ -400,16 +514,21 @@ int ks_server_run(const ks_config_t* cfg) {
             }
             if (should_close) {
                 ks_log_info("client disconnected (fd=%d)", client->fd);
+                (void)ks_pubsub_remove_client(pubsub, client->id);
                 client_reset(client);
             }
         }
     }
 
     for (int i = 0; i < KS_MAX_CLIENTS; i++) {
+        if (clients[i].used) {
+            (void)ks_pubsub_remove_client(pubsub, clients[i].id);
+        }
         client_reset(&clients[i]);
     }
     (void)ks_close(listen_fd);
     ks_kv_destroy(&store);
+    ks_pubsub_destroy(pubsub);
     if (previous_sigint != SIG_ERR) {
         (void)signal(SIGINT, previous_sigint);
     }

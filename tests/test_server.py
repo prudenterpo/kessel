@@ -77,6 +77,9 @@ def run(server):
             b" GET <key>\n"
             b" DEL <key>\n"
             b" EXISTS <key>\n"
+            b" PUBLISH <channel> <message>\n"
+            b" SUBSCRIBE <channel>\n"
+            b" UNSUBSCRIBE <channel>\n"
             b" HELP\n"
         )
         expect(primary, b"HELP\r\n", b"$%d\r\n%s\r\n" % (len(help_text), help_text))
@@ -105,6 +108,45 @@ def run(server):
         partial.sendall(b"PI")
         expect(concurrent, b"PING\r\n", b"+PONG\r\n")
         expect(partial, b"NG\r\n", b"+PONG\r\n")
+
+        subscriber = connect(port)
+        publisher = connect(port)
+        sockets.extend([subscriber, publisher])
+        expect(subscriber, b"SUBSCRIBE room\r\n", b"+OK\r\n")
+        expect(subscriber, b"SUBSCRIBE room\r\n", b"+OK\r\n")
+        expect(publisher, b'PUBLISH room "Player joined"\r\n', b":1\r\n")
+        message = (
+            b"*3\r\n"
+            b"$7\r\nmessage\r\n"
+            b"$4\r\nroom\r\n"
+            b"$13\r\nPlayer joined\r\n"
+        )
+        assert receive_exact(subscriber, len(message)) == message
+        expect(subscriber, b"UNSUBSCRIBE room\r\n", b":1\r\n")
+        expect(subscriber, b"UNSUBSCRIBE room\r\n", b":0\r\n")
+        expect(publisher, b"PUBLISH room ignored\r\n", b":0\r\n")
+
+        expect(subscriber, b"SUBSCRIBE cleanup\r\n", b"+OK\r\n")
+        sockets.remove(subscriber)
+        subscriber.close()
+        time.sleep(0.05)
+        expect(publisher, b"PUBLISH cleanup removed\r\n", b":0\r\n")
+
+        slow = connect(port)
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+        sockets.append(slow)
+        expect(slow, b"SUBSCRIBE slow\r\n", b"+OK\r\n")
+        large_message = b"x" * 60000
+        dropped = False
+        for _ in range(256):
+            publisher.sendall(b"PUBLISH slow " + large_message + b"\r\n")
+            publish_result = receive_exact(publisher, 4)
+            assert publish_result in (b":1\r\n", b":0\r\n"), publish_result
+            if publish_result == b":0\r\n":
+                dropped = True
+                break
+        assert dropped, "slow subscriber was not removed"
+        expect(publisher, b"PUBLISH slow ignored\r\n", b":0\r\n")
 
         half_closed = connect(port)
         sockets.append(half_closed)

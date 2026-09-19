@@ -54,7 +54,7 @@ Response forms remain:
 - Bulk: `$length\r\ndata\r\n`
 - Nil: `$-1\r\n`
 
-Pub/Sub delivery uses a documented bulk response containing the event type, channel, and message. Its exact framing must be fixed in `PROTOCOL.md` during V4 before the CLI subscription behavior is finalized.
+Pub/Sub delivery uses a RESP-style three-element array containing the bulk strings `message`, channel, and message. For example: `*3\r\n$7\r\nmessage\r\n$4\r\nroom\r\n$2\r\nhi\r\n`. Subscription commands return `+OK`; `UNSUBSCRIBE` returns `:1` or `:0`; `PUBLISH` returns the recipient count.
 
 ## Memory ownership
 
