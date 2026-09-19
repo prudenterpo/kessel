@@ -5,7 +5,9 @@
 #include "ks_protocol.h"
 #include "ks_pubsub.h"
 
+#include <errno.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +25,7 @@
 #define KS_OUTPUT_CAP (2u * (KS_MAX_REQUEST + 64u))
 #define KS_OUTPUT_HIGH_WATER (KS_OUTPUT_CAP / 2u)
 #define KS_ACCEPT_BUDGET 64
+#define KS_REAPER_BUDGET 32U
 
 typedef struct {
     int used;
@@ -142,6 +145,20 @@ static bool deliver_pubsub_message(ks_pubsub_client_id client_id,
     return false;
 }
 
+static int parse_seconds(const char* text, int64_t* seconds) {
+    if (text == NULL || seconds == NULL || *text == '\0') {
+        return -1;
+    }
+    errno = 0;
+    char* end = NULL;
+    long long parsed = strtoll(text, &end, 10);
+    if (errno == ERANGE || end == text || *end != '\0') {
+        return -1;
+    }
+    *seconds = (int64_t)parsed;
+    return 0;
+}
+
 static int handle_command(ks_client_t* client, ks_kv_t* store,
                           ks_pubsub_t* pubsub, ks_client_t clients[],
                           char* line) {
@@ -176,6 +193,9 @@ static int handle_command(ks_client_t* client, ks_kv_t* store,
             " GET <key>\n"
             " DEL <key>\n"
             " EXISTS <key>\n"
+            " SETEX <key> <seconds> <value>\n"
+            " EXPIRE <key> <seconds>\n"
+            " TTL <key>\n"
             " PUBLISH <channel> <message>\n"
             " SUBSCRIBE <channel>\n"
             " UNSUBSCRIBE <channel>\n"
@@ -211,6 +231,45 @@ static int handle_command(ks_client_t* client, ks_kv_t* store,
         }
         response_len = ks_fmt_int(response, sizeof(response),
                                   ks_kv_exists(store, command.argv[0]) ? 1 : 0);
+    } else if (strcmp(command.cmd, "SETEX") == 0) {
+        if (command.argc != 3) {
+            return queue_error(client, "wrong number of arguments to 'SETEX'");
+        }
+        int64_t seconds = 0;
+        if (parse_seconds(command.argv[1], &seconds) != 0 || seconds <= 0) {
+            return queue_error(client, "invalid expire time");
+        }
+        if (ks_kv_set_ex(store, command.argv[0], command.argv[2],
+                         strlen(command.argv[2]), (uint64_t)seconds) ==
+            KS_KV_SET_ERROR) {
+            return queue_error(client, "unable to store value");
+        }
+        response_len = ks_fmt_simple(response, sizeof(response), "OK");
+    } else if (strcmp(command.cmd, "EXPIRE") == 0) {
+        if (command.argc != 2) {
+            return queue_error(client, "wrong number of arguments to 'EXPIRE'");
+        }
+        int64_t seconds = 0;
+        if (parse_seconds(command.argv[1], &seconds) != 0) {
+            return queue_error(client, "invalid expire time");
+        }
+        ks_kv_expire_result_t expire_result =
+            seconds <= 0
+                ? (ks_kv_delete(store, command.argv[0])
+                       ? KS_KV_EXPIRE_UPDATED
+                       : KS_KV_EXPIRE_MISSING)
+                : ks_kv_expire(store, command.argv[0], (uint64_t)seconds);
+        if (expire_result == KS_KV_EXPIRE_ERROR) {
+            return queue_error(client, "invalid expire time");
+        }
+        response_len = ks_fmt_int(response, sizeof(response),
+                                  expire_result == KS_KV_EXPIRE_UPDATED ? 1 : 0);
+    } else if (strcmp(command.cmd, "TTL") == 0) {
+        if (command.argc != 1) {
+            return queue_error(client, "wrong number of arguments to 'TTL'");
+        }
+        response_len = ks_fmt_int(response, sizeof(response),
+                                  (long long)ks_kv_ttl(store, command.argv[0]));
     } else if (strcmp(command.cmd, "SUBSCRIBE") == 0) {
         if (command.argc != 1) {
             return queue_error(client, "wrong number of arguments to 'SUBSCRIBE'");
@@ -440,6 +499,7 @@ int ks_server_run(const ks_config_t* cfg) {
     int result = 0;
     int accept_backoff_ticks = 0;
     while (!ks_stop_requested) {
+        (void)ks_kv_reap(&store, KS_REAPER_BUDGET);
         fd_set read_fds;
         fd_set write_fds;
         FD_ZERO(&read_fds);

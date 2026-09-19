@@ -37,6 +37,7 @@ add_library(kessel_core
     src/ks_protocol.c
     src/ks_pubsub.c
     src/ks_server.c
+    src/ks_ttl.c
 )
 target_include_directories(kessel_core PUBLIC include)
 target_link_libraries(kessel_core PUBLIC kessel_options)
