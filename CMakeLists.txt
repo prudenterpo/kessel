@@ -89,4 +89,16 @@ if(BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_server.py $<TARGET_FILE:kessel>
     )
     set_tests_properties(server_integration PROPERTIES TIMEOUT 15)
+
+    add_test(
+        NAME hardening
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hardening.py $<TARGET_FILE:kessel>
+    )
+    set_tests_properties(hardening PROPERTIES TIMEOUT 30)
 endif()
+
+add_executable(bench_kv benches/bench_kv.c)
+target_link_libraries(bench_kv PRIVATE kessel_core)
+
+add_executable(bench_pubsub benches/bench_pubsub.c)
+target_link_libraries(bench_pubsub PRIVATE kessel_core)
