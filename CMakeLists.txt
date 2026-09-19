@@ -48,6 +48,17 @@ endif()
 add_executable(kessel src/main_server.c)
 target_link_libraries(kessel PRIVATE kessel_core)
 
+add_executable(kessel-cli cli/kessel_cli.c)
+target_link_libraries(kessel-cli PRIVATE kessel_options)
+
+find_path(KESSEL_LIBEDIT_INCLUDE_DIR histedit.h)
+find_library(KESSEL_LIBEDIT_LIBRARY edit)
+if(KESSEL_LIBEDIT_INCLUDE_DIR AND KESSEL_LIBEDIT_LIBRARY)
+    target_include_directories(kessel-cli PRIVATE ${KESSEL_LIBEDIT_INCLUDE_DIR})
+    target_link_libraries(kessel-cli PRIVATE ${KESSEL_LIBEDIT_LIBRARY})
+    target_compile_definitions(kessel-cli PRIVATE KESSEL_HAVE_LIBEDIT=1)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(test_protocol tests/test_protocol.c)
@@ -67,6 +78,12 @@ if(BUILD_TESTING)
     add_test(NAME pubsub COMMAND test_pubsub)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME cli
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.py $<TARGET_FILE:kessel-cli>
+    )
+    set_tests_properties(cli PROPERTIES TIMEOUT 15)
+
     add_test(
         NAME server_integration
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_server.py $<TARGET_FILE:kessel>
