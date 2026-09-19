@@ -37,7 +37,10 @@ ks_kv_set_result_t ks_kv_set_ex(ks_kv_t* store, const char* key,
                                 const char* value, size_t value_size,
                                 uint64_t ttl_seconds);
 
-/* The returned value remains owned by the store and is invalidated by writes. */
+/*
+ * The returned value remains owned by the store and is invalidated by any
+ * subsequent store operation, including lazy expiration and reaping.
+ */
 const char* ks_kv_get(ks_kv_t* store, const char* key,
                       size_t* value_size);
 

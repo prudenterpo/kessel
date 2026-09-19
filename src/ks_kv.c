@@ -10,6 +10,8 @@ typedef struct {
     char data[];
 } ks_kv_value_t;
 
+static ks_kv_value_t* ks_kv_find_live(ks_kv_t* store, const char* key);
+
 static uint64_t ks_kv_hash(const void* key) {
     const unsigned char* bytes = key;
     uint64_t hash = UINT64_C(14695981039346656037);
@@ -85,6 +87,8 @@ ks_kv_set_result_t ks_kv_set_ex(ks_kv_t* store, const char* key,
     if (store == NULL || key == NULL || (value == NULL && value_size != 0U)) {
         return KS_KV_SET_ERROR;
     }
+
+    (void)ks_kv_find_live(store, key);
 
     uint64_t deadline_ms = 0U;
     if (ttl_seconds != 0U &&

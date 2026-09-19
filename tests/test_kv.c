@@ -243,6 +243,18 @@ static void test_set_and_expire_semantics(void) {
     CHECK(ks_kv_expire(&store, "key", 0U) == KS_KV_EXPIRE_UPDATED);
     CHECK(ks_kv_ttl(&store, "key") == -2);
 
+    CHECK(ks_kv_set_ex(&store, "expired-set", "old", 3U, 1U) ==
+          KS_KV_SET_INSERTED);
+    CHECK(ks_kv_set_ex(&store, "expired-setex", "old", 3U, 1U) ==
+          KS_KV_SET_INSERTED);
+    time.now_ms += UINT64_C(1000);
+    CHECK(ks_kv_set(&store, "expired-set", "new", 3U) ==
+          KS_KV_SET_INSERTED);
+    CHECK(ks_kv_set_ex(&store, "expired-setex", "new", 3U, 2U) ==
+          KS_KV_SET_INSERTED);
+    CHECK(ks_kv_ttl(&store, "expired-set") == -1);
+    CHECK(ks_kv_ttl(&store, "expired-setex") == 2);
+
     time.now_ms = UINT64_MAX - UINT64_C(500);
     CHECK(ks_kv_set_ex(&store, "overflow", "x", 1U, 1U) ==
           KS_KV_SET_ERROR);
