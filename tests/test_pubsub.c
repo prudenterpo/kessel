@@ -23,7 +23,7 @@ typedef struct {
     size_t expected_message_length;
 } delivery_log_t;
 
-static void record_delivery(ks_pubsub_client_id client_id,
+static bool record_delivery(ks_pubsub_client_id client_id,
                             const char* channel,
                             const char* message,
                             size_t message_length,
@@ -42,6 +42,7 @@ static void record_delivery(ks_pubsub_client_id client_id,
     if (log->count < sizeof(log->clients) / sizeof(log->clients[0])) {
         log->clients[log->count++] = client_id;
     }
+    return true;
 }
 
 static int delivered_to(const delivery_log_t* log,

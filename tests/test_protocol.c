@@ -114,6 +114,8 @@ static void test_response_formatters(void) {
     CHECK(strcmp(response, "$0\r\n\r\n") == 0);
     CHECK(ks_fmt_nil(response, sizeof(response)) == 5);
     CHECK(strcmp(response, "$-1\r\n") == 0);
+    CHECK(ks_fmt_array_header(response, sizeof(response), 3) == 4);
+    CHECK(strcmp(response, "*3\r\n") == 0);
 }
 
 static void test_formatter_bounds(void) {
@@ -129,6 +131,7 @@ static void test_formatter_bounds(void) {
     CHECK(ks_fmt_bulk(exact, sizeof(exact), NULL, 1) == 0);
     CHECK(ks_fmt_nil(short_buffer, sizeof(short_buffer)) == 0);
     CHECK(short_buffer[0] == '\0');
+    CHECK(ks_fmt_array_header(NULL, 0, 1) == 0);
 }
 
 int main(void) {

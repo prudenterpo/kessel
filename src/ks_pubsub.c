@@ -215,9 +215,10 @@ size_t ks_pubsub_publish(const ks_pubsub_t* pubsub,
     size_t recipients = 0;
     for (ks_pubsub_subscriber_t* subscriber = matched_channel->subscribers;
          subscriber != NULL; subscriber = subscriber->next) {
-        deliver(subscriber->client_id, matched_channel->name, message,
-                message_length, context);
-        recipients++;
+        if (deliver(subscriber->client_id, matched_channel->name, message,
+                    message_length, context)) {
+            recipients++;
+        }
     }
     return recipients;
 }
