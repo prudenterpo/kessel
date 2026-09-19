@@ -3,6 +3,9 @@
 Kessel is a small in-memory key-value store and message broker written in C17.
 It exposes a line-based TCP protocol and keeps all data in memory.
 
+See [PROTOCOL.md](PROTOCOL.md) for the wire format and [DESIGN.md](DESIGN.md)
+for the architecture.
+
 ## Build
 
 Requirements: CMake 3.22 or newer, a C17 compiler, and Python 3 for the
@@ -12,6 +15,16 @@ integration tests.
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
+./build/bench_kv
+./build/bench_pubsub
+```
+
+Sanitized Debug build:
+
+```sh
+cmake -S . -B build-sanitizers -DCMAKE_BUILD_TYPE=Debug -DKESSEL_ENABLE_SANITIZERS=ON
+cmake --build build-sanitizers --parallel
+ctest --test-dir build-sanitizers --output-on-failure
 ```
 
 Start the server and connect with the CLI:
@@ -78,3 +91,6 @@ HELP
 Kessel v1 is intentionally ephemeral: restarting the server removes stored
 keys and subscriptions. It does not provide authentication, TLS, replication,
 or Redis wire compatibility.
+
+Benchmarks print `ops_per_sec` for local comparison. They are not release
+gates.

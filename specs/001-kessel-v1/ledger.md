@@ -3,11 +3,11 @@
 ## Current handoff
 
 - Base branch: `develop`
-- Active verticals: none
-- Status: feature verticals complete
+- Active verticals: V7 — Release hardening
+- Status: in progress
 - Active PRs: none
 - Blockers: none
-- Next: start V7 release hardening in a new thread.
+- Next: finish V7 checks, keep the PR open for review, then open `develop` to `master`.
 
 ## Vertical status
 
@@ -19,7 +19,7 @@
 | V4 — Pub/Sub | Done | V1 | https://github.com/prudenterpo/kessel/pull/3 |
 | V5 — CLI | Done | V1; finishes after V4 | https://github.com/prudenterpo/kessel/pull/5 |
 | V6 — Operations and distribution | Done | V1; integrates after V2/V4 | https://github.com/prudenterpo/kessel/pull/6 |
-| V7 — Release hardening | Ready | V2–V6 | — |
+| V7 — Release hardening | In progress | V2–V6 | — |
 
 ## Handoff rule
 
