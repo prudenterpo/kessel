@@ -2,12 +2,11 @@
 
 ## Current handoff
 
-- Base branch: `develop`
-- Active verticals: V7 — Release hardening
+- Base branch: `master`
+- Active verticals: v1 release
 - Status: in review
-- Active PRs: https://github.com/prudenterpo/kessel/pull/7
 - Blockers: none
-- Next: keep the PR open for review, then open `develop` to `master`.
+- Next: keep the release PR open for review, then merge `develop` to `master`.
 
 ## Vertical status
 
@@ -19,7 +18,7 @@
 | V4 — Pub/Sub | Done | V1 | https://github.com/prudenterpo/kessel/pull/3 |
 | V5 — CLI | Done | V1; finishes after V4 | https://github.com/prudenterpo/kessel/pull/5 |
 | V6 — Operations and distribution | Done | V1; integrates after V2/V4 | https://github.com/prudenterpo/kessel/pull/6 |
-| V7 — Release hardening | In review | V2–V6 | https://github.com/prudenterpo/kessel/pull/7 |
+| V7 — Release hardening | Done | V2–V6 | https://github.com/prudenterpo/kessel/pull/7 |
 
 ## Handoff rule
 
