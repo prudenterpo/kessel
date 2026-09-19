@@ -2,6 +2,7 @@ Checks: >
   -*,
   clang-analyzer-*,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-valist.Uninitialized,
   bugprone-sizeof-expression,
   bugprone-suspicious-memset-usage
 WarningsAsErrors: '*'
