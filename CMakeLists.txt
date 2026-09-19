@@ -37,6 +37,9 @@ add_library(kessel_core
 )
 target_include_directories(kessel_core PUBLIC include)
 target_link_libraries(kessel_core PUBLIC kessel_options)
+if(NOT WIN32)
+    target_compile_definitions(kessel_core PRIVATE _POSIX_C_SOURCE=200809L)
+endif()
 
 add_executable(kessel src/main_server.c)
 target_link_libraries(kessel PRIVATE kessel_core)
