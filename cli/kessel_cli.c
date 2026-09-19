@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -11,6 +12,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #if defined(KESSEL_HAVE_LIBEDIT)
@@ -37,8 +39,23 @@ typedef enum {
     RESPONSE_OK = 0,
     RESPONSE_DISCONNECTED,
     RESPONSE_IO_ERROR,
-    RESPONSE_PROTOCOL_ERROR
+    RESPONSE_PROTOCOL_ERROR,
+    RESPONSE_INTERRUPTED
 } response_status_t;
+
+typedef enum {
+    SUBSCRIBE_NOT_COMMAND = 0,
+    SUBSCRIBE_COMMAND,
+    SUBSCRIBE_NO_MEMORY
+} subscribe_status_t;
+
+typedef enum {
+    RESPONSE_KIND_SIMPLE,
+    RESPONSE_KIND_ERROR,
+    RESPONSE_KIND_INTEGER,
+    RESPONSE_KIND_BULK,
+    RESPONSE_KIND_ARRAY
+} response_kind_t;
 
 typedef struct {
     char* line;
@@ -49,6 +66,18 @@ typedef struct {
     HistEvent event;
 #endif
 } input_t;
+
+static volatile sig_atomic_t subscription_interrupted = 0;
+static bool subscription_active = false;
+static bool unsubscribe_sent = false;
+static const char* unsubscribe_command = NULL;
+static size_t unsubscribe_command_length = 0;
+static struct timespec unsubscribe_deadline;
+
+static void handle_subscription_interrupt(int signal_number) {
+    (void)signal_number;
+    subscription_interrupted = 1;
+}
 
 static void print_usage(FILE* stream, const char* program) {
     fprintf(stream, "Usage: %s [-h host] [-p port]\n", program);
@@ -160,8 +189,62 @@ static bool write_all(int fd, const void* data, size_t length) {
     return true;
 }
 
+static bool deadline_reached(const struct timespec* deadline) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return true;
+    }
+    return now.tv_sec > deadline->tv_sec ||
+           (now.tv_sec == deadline->tv_sec && now.tv_nsec >= deadline->tv_nsec);
+}
+
+static response_status_t send_pending_unsubscribe(int fd) {
+    if (!subscription_interrupted || unsubscribe_sent) {
+        return RESPONSE_OK;
+    }
+    if (unsubscribe_command == NULL ||
+        !write_all(fd, unsubscribe_command, unsubscribe_command_length)) {
+        return RESPONSE_IO_ERROR;
+    }
+    unsubscribe_sent = true;
+    if (clock_gettime(CLOCK_MONOTONIC, &unsubscribe_deadline) != 0) {
+        return RESPONSE_IO_ERROR;
+    }
+    ++unsubscribe_deadline.tv_sec;
+    return RESPONSE_OK;
+}
+
 static response_status_t fill_reader(response_reader_t* reader) {
     for (;;) {
+        if (subscription_active) {
+            response_status_t status = send_pending_unsubscribe(reader->fd);
+            if (status != RESPONSE_OK) {
+                return status;
+            }
+            if (unsubscribe_sent && deadline_reached(&unsubscribe_deadline)) {
+                return RESPONSE_INTERRUPTED;
+            }
+
+            struct pollfd descriptor = {
+                .fd = reader->fd,
+                .events = POLLIN,
+                .revents = 0,
+            };
+            int result = poll(&descriptor, 1, 100);
+            if (result == 0) {
+                continue;
+            }
+            if (result < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return RESPONSE_IO_ERROR;
+            }
+            if ((descriptor.revents & (POLLIN | POLLHUP)) == 0) {
+                return RESPONSE_IO_ERROR;
+            }
+        }
+
         ssize_t received = recv(reader->fd, reader->buffer,
                                 sizeof(reader->buffer), 0);
         if (received > 0) {
@@ -287,7 +370,71 @@ static response_status_t render_bulk(response_reader_t* reader,
     return RESPONSE_OK;
 }
 
-static response_status_t render_response(response_reader_t* reader) {
+static response_status_t render_array(response_reader_t* reader,
+                                      const char* header) {
+    long long count = 0;
+    if (!parse_integer(header, &count) || count < 0 || count > 16) {
+        return RESPONSE_PROTOCOL_ERROR;
+    }
+
+    for (long long i = 0; i < count; ++i) {
+        unsigned char type = 0;
+        response_status_t status = read_byte(reader, &type);
+        if (status != RESPONSE_OK) {
+            return status;
+        }
+        if (type != '$') {
+            return RESPONSE_PROTOCOL_ERROR;
+        }
+
+        char bulk_header[32];
+        status = read_header(reader, bulk_header, sizeof(bulk_header));
+        if (status != RESPONSE_OK) {
+            return status;
+        }
+        long long length = 0;
+        if (!parse_integer(bulk_header, &length) || length < -1 ||
+            length > (long long)KESSEL_CLI_MAX_LINE) {
+            return RESPONSE_PROTOCOL_ERROR;
+        }
+
+        if (i > 0 && fputc(' ', stdout) == EOF) {
+            return RESPONSE_IO_ERROR;
+        }
+        if (length == -1) {
+            if (fputs("(nil)", stdout) == EOF) {
+                return RESPONSE_IO_ERROR;
+            }
+            continue;
+        }
+
+        size_t remaining = (size_t)length;
+        unsigned char output[4096];
+        while (remaining > 0) {
+            size_t chunk = remaining < sizeof(output) ? remaining : sizeof(output);
+            status = read_exact(reader, output, chunk);
+            if (status != RESPONSE_OK) {
+                return status;
+            }
+            if (fwrite(output, 1, chunk, stdout) != chunk) {
+                return RESPONSE_IO_ERROR;
+            }
+            remaining -= chunk;
+        }
+        unsigned char terminator[2];
+        status = read_exact(reader, terminator, sizeof(terminator));
+        if (status != RESPONSE_OK) {
+            return status;
+        }
+        if (terminator[0] != '\r' || terminator[1] != '\n') {
+            return RESPONSE_PROTOCOL_ERROR;
+        }
+    }
+    return fputc('\n', stdout) == EOF ? RESPONSE_IO_ERROR : RESPONSE_OK;
+}
+
+static response_status_t render_response(response_reader_t* reader,
+                                         response_kind_t* kind) {
     unsigned char type = 0;
     response_status_t status = read_byte(reader, &type);
     if (status != RESPONSE_OK) {
@@ -302,12 +449,15 @@ static response_status_t render_response(response_reader_t* reader) {
 
     switch (type) {
         case '+':
+            *kind = RESPONSE_KIND_SIMPLE;
             puts(header);
             return RESPONSE_OK;
         case '-':
+            *kind = RESPONSE_KIND_ERROR;
             printf("(error) %s\n", header);
             return RESPONSE_OK;
         case ':': {
+            *kind = RESPONSE_KIND_INTEGER;
             long long value = 0;
             if (!parse_integer(header, &value)) {
                 return RESPONSE_PROTOCOL_ERROR;
@@ -316,7 +466,11 @@ static response_status_t render_response(response_reader_t* reader) {
             return RESPONSE_OK;
         }
         case '$':
+            *kind = RESPONSE_KIND_BULK;
             return render_bulk(reader, header);
+        case '*':
+            *kind = RESPONSE_KIND_ARRAY;
+            return render_array(reader, header);
         default:
             return RESPONSE_PROTOCOL_ERROR;
     }
@@ -430,12 +584,102 @@ static size_t command_length(const char* line, size_t length) {
     return length;
 }
 
+static subscribe_status_t copy_subscribe_argument(const char* line,
+                                                   size_t length,
+                                                   char** argument) {
+    *argument = NULL;
+    length = command_length(line, length);
+    while (length > 0 && (*line == ' ' || *line == '\t')) {
+        ++line;
+        --length;
+    }
+
+    static const char command[] = "SUBSCRIBE";
+    size_t command_size = sizeof(command) - 1U;
+    if (length <= command_size || strncasecmp(line, command, command_size) != 0 ||
+        (line[command_size] != ' ' && line[command_size] != '\t')) {
+        return SUBSCRIBE_NOT_COMMAND;
+    }
+    line += command_size;
+    length -= command_size;
+    while (length > 0 && (*line == ' ' || *line == '\t')) {
+        ++line;
+        --length;
+    }
+    while (length > 0 && (line[length - 1] == ' ' || line[length - 1] == '\t')) {
+        --length;
+    }
+    if (length == 0) {
+        return SUBSCRIBE_NOT_COMMAND;
+    }
+
+    *argument = malloc(length + 1U);
+    if (*argument == NULL) {
+        return SUBSCRIBE_NO_MEMORY;
+    }
+    memcpy(*argument, line, length);
+    (*argument)[length] = '\0';
+    return SUBSCRIBE_COMMAND;
+}
+
+static response_status_t wait_for_subscription_data(response_reader_t* reader) {
+    while (reader->begin == reader->end && !subscription_interrupted) {
+        struct pollfd descriptor = {
+            .fd = reader->fd,
+            .events = POLLIN,
+            .revents = 0,
+        };
+        int result = poll(&descriptor, 1, 100);
+        if (result < 0 && errno != EINTR) {
+            return RESPONSE_IO_ERROR;
+        }
+        if (result > 0 && (descriptor.revents & (POLLIN | POLLHUP)) == 0) {
+            return RESPONSE_IO_ERROR;
+        }
+    }
+    return RESPONSE_OK;
+}
+
+static response_status_t run_subscription(int fd, response_reader_t* reader,
+                                          bool response_interrupted) {
+    response_status_t status = RESPONSE_OK;
+    while (!subscription_interrupted && !response_interrupted) {
+        status = wait_for_subscription_data(reader);
+        if (status != RESPONSE_OK || subscription_interrupted) {
+            break;
+        }
+        response_kind_t kind;
+        status = render_response(reader, &kind);
+        if (status != RESPONSE_OK) {
+            break;
+        }
+        fflush(stdout);
+    }
+
+    if ((status == RESPONSE_OK && subscription_interrupted) ||
+        response_interrupted) {
+        status = send_pending_unsubscribe(fd);
+
+        while (status == RESPONSE_OK) {
+            response_kind_t kind;
+            status = render_response(reader, &kind);
+            if (status != RESPONSE_OK || kind == RESPONSE_KIND_INTEGER ||
+                kind == RESPONSE_KIND_ERROR) {
+                break;
+            }
+        }
+        fflush(stdout);
+    }
+
+    return status;
+}
+
 static void report_response_error(response_status_t status) {
     if (status == RESPONSE_DISCONNECTED) {
         fputs("kessel-cli: server disconnected\n", stderr);
     } else if (status == RESPONSE_PROTOCOL_ERROR) {
         fputs("kessel-cli: invalid response from server\n", stderr);
-    } else {
+    } else if (status != RESPONSE_INTERRUPTED) {
         fprintf(stderr, "kessel-cli: connection error: %s\n", strerror(errno));
     }
 }
@@ -483,13 +727,89 @@ int main(int argc, char* argv[]) {
             fputs("kessel-cli: command exceeds 64 KiB\n", stderr);
             continue;
         }
+        char* subscribe_argument = NULL;
+        subscribe_status_t subscribe_status =
+            copy_subscribe_argument(line, length, &subscribe_argument);
+        if (subscribe_status == SUBSCRIBE_NO_MEMORY) {
+            fputs("kessel-cli: cannot allocate subscription command\n", stderr);
+            exit_code = EXIT_FAILURE;
+            break;
+        }
+
+        void (*previous_sigint)(int) = SIG_DFL;
+        char* unsubscribe = NULL;
+        if (subscribe_status == SUBSCRIBE_COMMAND) {
+            size_t capacity = strlen(subscribe_argument) +
+                              sizeof("UNSUBSCRIBE \r\n");
+            unsubscribe = malloc(capacity);
+            if (unsubscribe == NULL) {
+                free(subscribe_argument);
+                fputs("kessel-cli: cannot allocate subscription command\n", stderr);
+                exit_code = EXIT_FAILURE;
+                break;
+            }
+            int written = snprintf(unsubscribe, capacity, "UNSUBSCRIBE %s\r\n",
+                                   subscribe_argument);
+            if (written < 0 || (size_t)written >= capacity) {
+                free(unsubscribe);
+                free(subscribe_argument);
+                fputs("kessel-cli: cannot prepare subscription command\n", stderr);
+                exit_code = EXIT_FAILURE;
+                break;
+            }
+
+            subscription_interrupted = 0;
+            unsubscribe_sent = false;
+            unsubscribe_command = unsubscribe;
+            unsubscribe_command_length = (size_t)written;
+            subscription_active = true;
+            previous_sigint = signal(SIGINT, handle_subscription_interrupt);
+            if (previous_sigint == SIG_ERR) {
+                subscription_active = false;
+                unsubscribe_command = NULL;
+                free(unsubscribe);
+                free(subscribe_argument);
+                fputs("kessel-cli: cannot install interrupt handler\n", stderr);
+                exit_code = EXIT_FAILURE;
+                break;
+            }
+        }
+
         if (!send_command(fd, line, length)) {
+            if (subscribe_status == SUBSCRIBE_COMMAND) {
+                (void)signal(SIGINT, previous_sigint);
+                subscription_active = false;
+                unsubscribe_command = NULL;
+            }
+            free(unsubscribe);
+            free(subscribe_argument);
             fprintf(stderr, "kessel-cli: connection error: %s\n", strerror(errno));
             exit_code = EXIT_FAILURE;
             break;
         }
 
-        response_status_t status = render_response(&reader);
+        response_kind_t kind;
+        response_status_t status = render_response(&reader, &kind);
+        bool response_interrupted = status == RESPONSE_INTERRUPTED;
+        if (subscribe_status == SUBSCRIBE_COMMAND &&
+            ((status == RESPONSE_OK &&
+              (kind == RESPONSE_KIND_SIMPLE || subscription_interrupted)) ||
+             response_interrupted)) {
+            status = run_subscription(fd, &reader, response_interrupted);
+        }
+        if (subscribe_status == SUBSCRIBE_COMMAND) {
+            (void)signal(SIGINT, previous_sigint);
+            subscription_active = false;
+            subscription_interrupted = 0;
+            unsubscribe_sent = false;
+            unsubscribe_command = NULL;
+            unsubscribe_command_length = 0;
+        }
+        free(unsubscribe);
+        free(subscribe_argument);
+        if (status == RESPONSE_INTERRUPTED) {
+            break;
+        }
         if (status != RESPONSE_OK) {
             report_response_error(status);
             exit_code = EXIT_FAILURE;

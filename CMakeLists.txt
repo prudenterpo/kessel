@@ -80,7 +80,7 @@ if(BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(
         NAME cli
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.py $<TARGET_FILE:kessel-cli>
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.py $<TARGET_FILE:kessel-cli> $<TARGET_FILE:kessel>
     )
     set_tests_properties(cli PROPERTIES TIMEOUT 15)
 
