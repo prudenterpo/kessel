@@ -1,6 +1,7 @@
 #ifndef KS_PUBSUB_H
 #define KS_PUBSUB_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -17,11 +18,12 @@ typedef enum {
 
 /*
  * Called once for each subscriber present when a message is published.
- * The channel and message remain owned by the caller/registry and are only
+ * Return true when the message was accepted by the client. The channel and
+ * message remain owned by the caller/registry and are only
  * valid for the duration of the callback. The callback must not mutate the
  * registry that initiated the publish operation.
  */
-typedef void (*ks_pubsub_delivery_fn)(ks_pubsub_client_id client_id,
+typedef bool (*ks_pubsub_delivery_fn)(ks_pubsub_client_id client_id,
                                       const char* channel,
                                       const char* message,
                                       size_t message_length,
@@ -43,8 +45,9 @@ size_t ks_pubsub_remove_client(ks_pubsub_t* pubsub,
                                ks_pubsub_client_id client_id);
 
 /*
- * Delivers a message to the current subscribers and returns the recipient
- * count. The message may be NULL only when message_length is zero.
+ * Delivers a message to the current subscribers and returns the number of
+ * callbacks that accepted it. The message may be NULL only when
+ * message_length is zero.
  */
 size_t ks_pubsub_publish(const ks_pubsub_t* pubsub,
                          const char* channel,

@@ -195,3 +195,16 @@ size_t ks_fmt_nil(char* dst, size_t cap) {
     memcpy(dst, nil, sizeof(nil));
     return sizeof(nil) - 1U;
 }
+
+size_t ks_fmt_array_header(char* dst, size_t cap, size_t count) {
+    if (dst == NULL || cap == 0) {
+        return 0;
+    }
+    dst[0] = '\0';
+    int written = snprintf(dst, cap, "*%zu\r\n", count);
+    if (written < 0 || (size_t)written >= cap) {
+        dst[0] = '\0';
+        return 0;
+    }
+    return (size_t)written;
+}

@@ -36,5 +36,6 @@ size_t ks_fmt_error(char* dst, size_t cap, const char* msg);
 size_t ks_fmt_int(char* dst, size_t cap, long long v);
 size_t ks_fmt_bulk(char* dst, size_t cap, const char* s, size_t n);
 size_t ks_fmt_nil(char* dst, size_t cap);
+size_t ks_fmt_array_header(char* dst, size_t cap, size_t count);
 
 #endif
