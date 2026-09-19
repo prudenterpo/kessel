@@ -68,6 +68,11 @@ static void test_malformed_requests(void) {
     CHECK(!ks_parse_line(suffix, &command));
     CHECK(!ks_parse_line(embedded_quote, &command));
     CHECK(!ks_parse_line(empty, NULL));
+
+    char empty_command[] = "\"\"";
+    CHECK(!ks_parse_line(empty_command, &command));
+    char unknown_escape[] = "SET key \"ok\\tvalue\"";
+    CHECK(!ks_parse_line(unknown_escape, &command));
 }
 
 static void test_request_limit(void) {
